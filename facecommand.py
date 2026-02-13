@@ -230,10 +230,52 @@ def execute_action(action_type, key_bind='', command='', macro=''):
     if not action_type or action_type == 'none': return
     if action_type == 'key': execute_key_press(key_bind)
     elif action_type == 'macro': execute_macro(macro)
+    elif action_type == 'the_rock': play_sound_file('the_rock.mp3')
     elif action_type == 'command' and command:
         try: subprocess.Popen(command, shell=True)
         except: pass
     else: execute_mouse_action(action_type)
+
+def play_sound_file(filename):
+    """Play an MP3/WAV file using PowerShell MediaPlayer (reliable on all Windows)."""
+    fpath = os.path.join(os.path.dirname(os.path.abspath(__file__)), filename)
+    print(f"[SOUND] Attempting to play: {fpath}")
+    if not os.path.exists(fpath):
+        print(f"[SOUND] ERROR: File not found: {fpath}")
+        return
+    print(f"[SOUND] File exists, size: {os.path.getsize(fpath)} bytes")
+    fpath_ps = fpath.replace("'", "''")
+    ps_cmd = (
+        f"try {{"
+        f"  Add-Type -AssemblyName PresentationCore;"
+        f"  $p=New-Object System.Windows.Media.MediaPlayer;"
+        f"  $p.Open([Uri]'{fpath_ps}');"
+        f"  Start-Sleep -Milliseconds 500;"
+        f"  $p.Play();"
+        f"  Start-Sleep -Seconds 10;"
+        f"  $p.Close()"
+        f"}} catch {{"
+        f"  $_ | Out-File -FilePath '{fpath_ps}.error.log'"
+        f"}}"
+    )
+    cmd = ['powershell', '-WindowStyle', 'Hidden', '-Command', ps_cmd]
+    print(f"[SOUND] Running: {' '.join(cmd[:3])}...")
+    try:
+        proc = subprocess.Popen(cmd, creationflags=0x08000000,
+                                stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+        print(f"[SOUND] PowerShell PID: {proc.pid}")
+        # Check result in background
+        def _check():
+            out, err = proc.communicate(timeout=15)
+            if proc.returncode != 0:
+                print(f"[SOUND] PowerShell exited with code {proc.returncode}")
+                if err: print(f"[SOUND] stderr: {err.decode('utf-8','replace')}")
+                if out: print(f"[SOUND] stdout: {out.decode('utf-8','replace')}")
+            else:
+                print(f"[SOUND] PowerShell completed OK")
+        threading.Thread(target=_check, daemon=True).start()
+    except Exception as e:
+        print(f"[SOUND] ERROR launching PowerShell: {e}")
 
 # â•â•â• FACE MESH â•â•â•
 
@@ -486,7 +528,7 @@ GESTURES = [
     dict(id='smirk_right', name='Right Smirk', sub='Right corner raised', icon='\U0001F60F', color='#44ddaa', ds=50, dtmin=35, dtmax=90),
 ]
 
-ACTION_TYPES = [('none','No Action'),('key','Key Press'),('macro','Macro Sequence'),('left_click','Left Click'),
+ACTION_TYPES = [('none','No Action'),('key','Key Press'),('macro','Macro Sequence'),('the_rock','\U0001FAA8 The Rock'),('left_click','Left Click'),
     ('right_click','Right Click'),('double_click','Double Click'),('middle_click','Middle Click'),
     ('scroll_up','Scroll Up'),('scroll_down','Scroll Down'),('drag_toggle','Drag Toggle'),('command','Run Command')]
 
@@ -1099,6 +1141,10 @@ class MainWindow(QMainWindow):
         for i,g in enumerate(GESTURES):
             card=GestureCard(g); self.cards[g['id']]=card; grid.addWidget(card, i//2, i%2)
         rl.addLayout(grid)
+        # Default: Right Eyebrow → The Rock
+        for i in range(self.cards['eyebrow_raise_right'].ac.count()):
+            if self.cards['eyebrow_raise_right'].ac.itemData(i) == 'the_rock':
+                self.cards['eyebrow_raise_right'].ac.setCurrentIndex(i); break
 
         rl.addWidget(self._sec("GLOBAL SETTINGS"))
         gc=QFrame(); gc.setStyleSheet("background:#16161f;border:1px solid #2a2a3a;border-radius:10px;")
