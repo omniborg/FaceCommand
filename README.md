@@ -1,6 +1,8 @@
 # FaceCommand
 Webcam-based facial gesture macro tool written in python
 
+Run fc_install to install dependencies 
+
 Features: 
 
 Webcam feed with zoom and pan
