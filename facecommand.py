@@ -277,7 +277,7 @@ def play_sound_file(filename):
     except Exception as e:
         print(f"[SOUND] ERROR launching PowerShell: {e}")
 
-# â•â•â• FACE MESH â•â•â•
+# ÃƒÂ¢Ã¢â‚¬Â¢Ã‚ÂÃƒÂ¢Ã¢â‚¬Â¢Ã‚ÂÃƒÂ¢Ã¢â‚¬Â¢Ã‚Â FACE MESH ÃƒÂ¢Ã¢â‚¬Â¢Ã‚ÂÃƒÂ¢Ã¢â‚¬Â¢Ã‚ÂÃƒÂ¢Ã¢â‚¬Â¢Ã‚Â
 
 LEFT_EYE_EAR = [33,160,158,133,153,144]; RIGHT_EYE_EAR = [362,385,387,263,373,380]
 LEFT_EYEBROW = [70,63,105,66,107]; RIGHT_EYEBROW = [300,293,334,296,336]
@@ -365,7 +365,7 @@ class GestureDetector:
 
         # Brow furrow: brow-to-eye-corner gap (pitch-robust) + inter-brow gap
         brow_inner_gap = _dist(lm[LEFT_BROW_INNER], lm[RIGHT_BROW_INNER]) / (fw + 0.0001)
-        # Use fw (face width) not fh — fh changes when mouth opens (chin drops), causing crosstalk
+        # Use fw (face width) not fh Ã¢â‚¬â€ fh changes when mouth opens (chin drops), causing crosstalk
         l_brow_eye_gap = (lm[LEFT_BROW_INNER].y - lm[LEFT_INNER_EYE].y) / (fw + 0.0001)
         r_brow_eye_gap = (lm[RIGHT_BROW_INNER].y - lm[RIGHT_INNER_EYE].y) / (fw + 0.0001)
         brow_eye_gap = (l_brow_eye_gap + r_brow_eye_gap) / 2
@@ -445,7 +445,7 @@ class GestureDetector:
                 raw[k] = 0
         return raw
 
-# â•â•â• CAMERA THREAD â•â•â•
+# ÃƒÂ¢Ã¢â‚¬Â¢Ã‚ÂÃƒÂ¢Ã¢â‚¬Â¢Ã‚ÂÃƒÂ¢Ã¢â‚¬Â¢Ã‚Â CAMERA THREAD ÃƒÂ¢Ã¢â‚¬Â¢Ã‚ÂÃƒÂ¢Ã¢â‚¬Â¢Ã‚ÂÃƒÂ¢Ã¢â‚¬Â¢Ã‚Â
 
 class CameraThread(QThread):
     frame_ready = pyqtSignal(object, object, float)
@@ -511,7 +511,7 @@ class CameraThread(QThread):
             self.frame_ready.emit(frame, lm, fps)
         cap.release(); fm.close()
 
-# â•â•â• GESTURE DEFS â•â•â•
+# ÃƒÂ¢Ã¢â‚¬Â¢Ã‚ÂÃƒÂ¢Ã¢â‚¬Â¢Ã‚ÂÃƒÂ¢Ã¢â‚¬Â¢Ã‚Â GESTURE DEFS ÃƒÂ¢Ã¢â‚¬Â¢Ã‚ÂÃƒÂ¢Ã¢â‚¬Â¢Ã‚ÂÃƒÂ¢Ã¢â‚¬Â¢Ã‚Â
 
 GESTURES = [
     dict(id='eyebrow_raise', name='Eyebrow Raise', sub='Both eyebrows up', icon='\U0001F928', color='#00d4ff', ds=50, dtmin=30, dtmax=80),
@@ -539,7 +539,7 @@ _HOLDABLE_ACTIONS = {'key','left_click','right_click','middle_click'}
 # Actions that repeat during hold mode (non-holdable continuous actions)
 _REPEATABLE_ACTIONS = {'scroll_up','scroll_down','double_click','macro'}
 
-# â•â•â• STYLESHEET â•â•â•
+# ÃƒÂ¢Ã¢â‚¬Â¢Ã‚ÂÃƒÂ¢Ã¢â‚¬Â¢Ã‚ÂÃƒÂ¢Ã¢â‚¬Â¢Ã‚Â STYLESHEET ÃƒÂ¢Ã¢â‚¬Â¢Ã‚ÂÃƒÂ¢Ã¢â‚¬Â¢Ã‚ÂÃƒÂ¢Ã¢â‚¬Â¢Ã‚Â
 
 SS = """
 QMainWindow,QWidget{background:#0a0a0f;color:#e8e8f0;font-family:"Segoe UI";font-size:12px}
@@ -563,7 +563,7 @@ QProgressBar{height:4px;background:#1e1e2a;border:none;border-radius:2px}
 QProgressBar::chunk{border-radius:2px}
 """
 
-# â•â•â• KEY CAPTURE â•â•â•
+# ÃƒÂ¢Ã¢â‚¬Â¢Ã‚ÂÃƒÂ¢Ã¢â‚¬Â¢Ã‚ÂÃƒÂ¢Ã¢â‚¬Â¢Ã‚Â KEY CAPTURE ÃƒÂ¢Ã¢â‚¬Â¢Ã‚ÂÃƒÂ¢Ã¢â‚¬Â¢Ã‚ÂÃƒÂ¢Ã¢â‚¬Â¢Ã‚Â
 
 class KeyCaptureEdit(QLineEdit):
     def __init__(self, p=None):
@@ -580,7 +580,7 @@ class KeyCaptureEdit(QLineEdit):
         if kt: p.append(kt)
         self.setText('+'.join(p)); self.clearFocus()
 
-# ═══ MACRO EDITOR ═══
+# Ã¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢Â MACRO EDITOR Ã¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢Â
 
 MACRO_STEP_TYPES = [('key','Key Press'),('hold','Hold Key'),('mouse','Mouse Action'),('delay','Delay (ms)')]
 MACRO_MOUSE_ACTIONS = [('left_click','Left Click'),('right_click','Right Click'),('double_click','Double Click'),
@@ -726,7 +726,7 @@ class MacroEditor(QFrame):
     def clear(self):
         for r in list(self.step_rows): self._remove_step(r)
 
-# â•â•â• GESTURE CHAIN CARD â•â•â•
+# ÃƒÂ¢Ã¢â‚¬Â¢ÃƒÂ¢Ã¢â‚¬Â¢ÃƒÂ¢Ã¢â‚¬Â¢ GESTURE CHAIN CARD ÃƒÂ¢Ã¢â‚¬Â¢ÃƒÂ¢Ã¢â‚¬Â¢ÃƒÂ¢Ã¢â‚¬Â¢
 
 GESTURE_CHOICES = [(g['id'], f"{g['icon']} {g['name']}") for g in GESTURES]
 
@@ -905,7 +905,293 @@ class GestureChainCard(QFrame):
             self.progress_lbl.setText(f"Progress: {dots.strip()} ({step_idx}/{total})")
             self.progress_lbl.setStyleSheet("font-family:Consolas;font-size:10px;color:#ffaa00;border:none;padding-top:4px;")
 
-# â•â•â• GESTURE CARD â•â•â•
+
+# ••• MORSE CHAIN CARD •••
+
+from PyQt6.QtGui import QPainter, QColor, QPen, QBrush
+from PyQt6.QtCore import QRect, QRectF
+
+
+class MorseProgressWidget(QWidget):
+    """Custom widget that draws morse-code hold progress as split-pill cells."""
+
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self.setFixedHeight(24)
+        self.setMinimumWidth(100)
+        self.completed = []       # list of 'S' or 'L'
+        self.in_progress = 0.0   # 0.0-0.5 = short zone, 0.5-1.0 = long zone
+        self.active = False
+        self.matched = False
+        self._flash = 0
+
+    def set_state(self, completed, in_progress_frac, active):
+        self.completed = completed
+        self.in_progress = in_progress_frac
+        self.active = active
+        self.update()
+
+    def flash_match(self):
+        self.matched = True; self._flash = 6; self.update()
+
+    def reset(self):
+        self.completed = []; self.in_progress = 0.0; self.active = False
+        self.matched = False; self._flash = 0; self.update()
+
+    def paintEvent(self, event):
+        p = QPainter(self)
+        p.setRenderHint(QPainter.RenderHint.Antialiasing)
+        w = self.width(); h = self.height()
+        cell_gap = 4
+        n_cells = len(self.completed) + (1 if self.active else 0)
+        if n_cells == 0:
+            p.setPen(QColor('#555570'))
+            p.drawText(self.rect(), Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter, '  Waiting for gesture...')
+            p.end(); return
+        cir_d = h - 6; pill_w = int(cir_d * 2.5)
+        cell_widths = []
+        for t in self.completed:
+            cell_widths.append(cir_d if t == 'S' else pill_w)
+        if self.active: cell_widths.append(pill_w)
+        x = 4; cy = h // 2
+        for i, t in enumerate(self.completed):
+            cw = cell_widths[i]
+            if self._flash > 0: clr = QColor('#00ff88')
+            elif t == 'S': clr = QColor('#00d4ff')
+            else: clr = QColor('#ffaa00')
+            p.setPen(Qt.PenStyle.NoPen); p.setBrush(QBrush(clr))
+            if t == 'S': p.drawEllipse(x, cy - cir_d//2, cir_d, cir_d)
+            else:
+                r = cir_d // 2; p.drawRoundedRect(x, cy - r, cw, cir_d, r, r)
+            x += cw + cell_gap
+        if self.active:
+            cw = cell_widths[-1]; r = cir_d // 2; frac = self.in_progress
+            p.setPen(Qt.PenStyle.NoPen); p.setBrush(QBrush(QColor('#1e1e2a')))
+            p.drawRoundedRect(x, cy - r, cw, cir_d, r, r)
+            p.setPen(QPen(QColor('#2a2a3a'), 1)); p.setBrush(Qt.BrushStyle.NoBrush)
+            p.drawRoundedRect(x, cy - r, cw, cir_d, r, r); p.setPen(Qt.PenStyle.NoPen)
+            half = cw // 2
+            if frac <= 0.5:
+                fill_w = int(frac * 2 * half)
+                if fill_w > 0:
+                    p.save(); p.setClipRect(QRectF(x, cy - r, fill_w, cir_d))
+                    p.setBrush(QBrush(QColor('#00d4ff88')))
+                    p.drawRoundedRect(x, cy - r, cw, cir_d, r, r); p.restore()
+                p.setPen(QPen(QColor('#2a2a3a'), 1))
+                p.drawLine(x + half, cy - r + 2, x + half, cy + r - 2); p.setPen(Qt.PenStyle.NoPen)
+            else:
+                p.save(); p.setClipRect(QRectF(x, cy - r, half, cir_d))
+                p.setBrush(QBrush(QColor('#00d4ffcc')))
+                p.drawRoundedRect(x, cy - r, cw, cir_d, r, r); p.restore()
+                right_frac = (frac - 0.5) * 2; right_fill = int(right_frac * half)
+                if right_fill > 0:
+                    p.save(); p.setClipRect(QRectF(x + half, cy - r, right_fill, cir_d))
+                    p.setBrush(QBrush(QColor('#ffaa00aa')))
+                    p.drawRoundedRect(x, cy - r, cw, cir_d, r, r); p.restore()
+                p.setPen(QPen(QColor('#ffaa00'), 1))
+                p.drawLine(x + half, cy - r + 2, x + half, cy + r - 2); p.setPen(Qt.PenStyle.NoPen)
+        if self._flash > 0:
+            self._flash -= 1
+            if self._flash == 0: self.matched = False
+            from PyQt6.QtCore import QTimer
+            QTimer.singleShot(80, self.update)
+        p.end()
+
+
+class MorsePatternRow(QFrame):
+    """One row: a morse pattern (S/L buttons) + action assignment."""
+    removed = pyqtSignal(object)
+
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self.setStyleSheet("background:#1a1a26;border:1px solid #2a2a3a;border-radius:6px;")
+        self._symbols = []
+        outer = QVBoxLayout(self); outer.setContentsMargins(8,6,8,6); outer.setSpacing(4)
+        top = QHBoxLayout(); top.setSpacing(4)
+        self.sym_frame = QFrame()
+        self.sym_frame.setStyleSheet("background:transparent;border:none;")
+        self.sym_layout = QHBoxLayout(self.sym_frame)
+        self.sym_layout.setContentsMargins(0,0,0,0); self.sym_layout.setSpacing(3)
+        top.addWidget(self.sym_frame, stretch=1)
+        add_s = QPushButton("\u00b7S"); add_s.setFixedSize(28,22)
+        add_s.setStyleSheet("font-size:10px;font-weight:700;padding:0;border:1px solid #00d4ff55;color:#00d4ff;border-radius:4px;background:#00d4ff15;")
+        add_s.setToolTip("Add Short hold"); add_s.clicked.connect(lambda: self._add_symbol('S')); top.addWidget(add_s)
+        add_l = QPushButton("\u2501L"); add_l.setFixedSize(28,22)
+        add_l.setStyleSheet("font-size:10px;font-weight:700;padding:0;border:1px solid #ffaa0055;color:#ffaa00;border-radius:4px;background:#ffaa0015;")
+        add_l.setToolTip("Add Long hold"); add_l.clicked.connect(lambda: self._add_symbol('L')); top.addWidget(add_l)
+        clr = QPushButton("\u2715"); clr.setFixedSize(22,22)
+        clr.setStyleSheet("font-size:10px;padding:0;border:none;color:#ff4466;background:transparent;")
+        clr.setToolTip("Clear pattern"); clr.clicked.connect(self._clear_symbols); top.addWidget(clr)
+        rb = QPushButton("\U0001F5D1"); rb.setFixedSize(22,22)
+        rb.setStyleSheet("font-size:11px;padding:0;border:none;color:#555570;background:transparent;")
+        rb.setToolTip("Remove this pattern row"); rb.clicked.connect(lambda: self.removed.emit(self)); top.addWidget(rb)
+        outer.addLayout(top)
+        bot = QHBoxLayout(); bot.setSpacing(4)
+        arr = QLabel("\u2192"); arr.setStyleSheet("color:#555570;font-size:12px;border:none;"); bot.addWidget(arr)
+        self.ac = QComboBox(); self.ac.setFixedHeight(22); self.ac.setStyleSheet("font-size:10px;")
+        for v, l in ACTION_TYPES: self.ac.addItem(l, v)
+        self.ac.currentIndexChanged.connect(self._oa); bot.addWidget(self.ac, stretch=1)
+        self.ke = KeyCaptureEdit(); self.ke.setFixedWidth(80); self.ke.setFixedHeight(22); self.ke.hide(); bot.addWidget(self.ke)
+        self.ce = QLineEdit(); self.ce.setPlaceholderText("Command..."); self.ce.setFixedHeight(22); self.ce.hide(); bot.addWidget(self.ce)
+        outer.addLayout(bot)
+        self.me = MacroEditor(); self.me.hide(); outer.addWidget(self.me)
+        self._rebuild_symbols()
+
+    def _oa(self):
+        a = self.ac.currentData()
+        self.ke.setVisible(a == 'key'); self.ce.setVisible(a == 'command'); self.me.setVisible(a == 'macro')
+
+    def _add_symbol(self, sym):
+        self._symbols.append(sym); self._rebuild_symbols()
+
+    def _clear_symbols(self):
+        self._symbols = []; self._rebuild_symbols()
+
+    def _rebuild_symbols(self):
+        while self.sym_layout.count():
+            item = self.sym_layout.takeAt(0)
+            if item.widget(): item.widget().deleteLater()
+        for i, sym in enumerate(self._symbols):
+            if sym == 'S':
+                lbl = QLabel("\u00b7"); lbl.setFixedSize(14, 20); lbl.setAlignment(Qt.AlignmentFlag.AlignCenter)
+                lbl.setStyleSheet("background:#00d4ff33;border:1px solid #00d4ff66;border-radius:7px;color:#00d4ff;font-size:14px;font-weight:700;")
+            else:
+                lbl = QLabel("\u2501"); lbl.setFixedSize(26, 20); lbl.setAlignment(Qt.AlignmentFlag.AlignCenter)
+                lbl.setStyleSheet("background:#ffaa0033;border:1px solid #ffaa0066;border-radius:4px;color:#ffaa00;font-size:11px;font-weight:700;")
+            idx = i; lbl.mousePressEvent = lambda e, ix=idx: self._remove_symbol(ix)
+            lbl.setToolTip("Click to remove"); self.sym_layout.addWidget(lbl)
+        if not self._symbols:
+            hint = QLabel("click \u00b7S or \u2501L to build pattern")
+            hint.setStyleSheet("color:#555570;font-size:10px;border:none;"); self.sym_layout.addWidget(hint)
+        self.sym_layout.addStretch()
+
+    def _remove_symbol(self, idx):
+        if 0 <= idx < len(self._symbols): self._symbols.pop(idx); self._rebuild_symbols()
+
+    def get_pattern(self): return list(self._symbols)
+    def set_pattern(self, syms): self._symbols = list(syms); self._rebuild_symbols()
+    def get_action_state(self):
+        return dict(action=self.ac.currentData(), keyBind=self.ke.text(), command=self.ce.text(), macro=self.me.to_macro_string())
+    def set_action_state(self, s):
+        a = s.get('action', 'none')
+        for i in range(self.ac.count()):
+            if self.ac.itemData(i) == a: self.ac.setCurrentIndex(i); break
+        self.ke.setText(s.get('keyBind', '')); self.ce.setText(s.get('command', '')); self.me.set_from_string(s.get('macro', ''))
+    def get_state(self): return dict(pattern=self._symbols, **self.get_action_state())
+    def set_state(self, s): self.set_pattern(s.get('pattern', [])); self.set_action_state(s)
+
+
+class MorseChainCard(QFrame):
+    """Morse-code gesture chain: one gesture + short/long thresholds + pattern->action rows."""
+    chain_deleted = pyqtSignal(object)
+    gesture_claimed = pyqtSignal(str)
+    gesture_released = pyqtSignal(str)
+
+    def __init__(self, chain_id=0, parent=None):
+        super().__init__(parent)
+        self.chain_id = chain_id
+        self._cur_gesture = ''
+        self.setStyleSheet("background:#16161f;border:1px solid #ff884455;border-radius:10px;")
+        ly = QVBoxLayout(self); ly.setContentsMargins(12,12,12,12); ly.setSpacing(6)
+        top = QHBoxLayout()
+        ic = QLabel("\u2505"); ic.setFixedSize(30,30); ic.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        ic.setStyleSheet("background:#ff884433;border-radius:6px;font-size:15px;border:none;"); top.addWidget(ic)
+        nb = QVBoxLayout(); nb.setSpacing(0)
+        self.name_lbl = QLabel(f"Morse Chain #{chain_id+1}")
+        self.name_lbl.setStyleSheet("font-weight:600;font-size:13px;color:#ff8844;border:none;")
+        sub = QLabel("Short \u00b7 Long \u2501 hold sequences \u2192 actions")
+        sub.setStyleSheet("color:#555570;font-size:11px;border:none;")
+        nb.addWidget(self.name_lbl); nb.addWidget(sub); top.addLayout(nb); top.addStretch()
+        del_btn = QPushButton("\U0001F5D1 Delete"); del_btn.setFixedHeight(26)
+        del_btn.setStyleSheet("font-size:10px;padding:2px 8px;border:1px solid #ff446655;color:#ff4466;border-radius:4px;background:transparent;")
+        del_btn.clicked.connect(lambda: self.chain_deleted.emit(self)); top.addWidget(del_btn)
+        ly.addLayout(top)
+        ly.addWidget(self._lbl("Trigger Gesture"))
+        self.gcb = QComboBox(); self.gcb.setFixedHeight(26)
+        self.gcb.addItem("Select gesture...", "")
+        for gid, label in GESTURE_CHOICES: self.gcb.addItem(label, gid)
+        self.gcb.currentIndexChanged.connect(self._on_gesture_changed); ly.addWidget(self.gcb)
+        sep0 = QFrame(); sep0.setFrameShape(QFrame.Shape.HLine); sep0.setStyleSheet("color:#2a2a3a;"); ly.addWidget(sep0)
+        th_row = QHBoxLayout(); th_row.setSpacing(16)
+        sh_col = QVBoxLayout(); sh_col.setSpacing(2)
+        sh_hdr = QHBoxLayout()
+        sh_lbl = QLabel("Short Hold"); sh_lbl.setStyleSheet("font-size:11px;color:#00d4ff;border:none;font-weight:600;")
+        sh_hdr.addWidget(sh_lbl); sh_hdr.addStretch()
+        self.sh_val = QLabel("200 ms"); self.sh_val.setStyleSheet("font-family:Consolas;font-size:11px;color:#00d4ff;border:none;")
+        sh_hdr.addWidget(self.sh_val); sh_col.addLayout(sh_hdr)
+        self.sh_sl = QSlider(Qt.Orientation.Horizontal); self.sh_sl.setRange(50,1000); self.sh_sl.setSingleStep(25); self.sh_sl.setValue(200)
+        self.sh_sl.setStyleSheet("QSlider::handle:horizontal{background:#00d4ff;border:2px solid #16161f;}")
+        self.sh_sl.valueChanged.connect(lambda v: self.sh_val.setText(f"{v} ms")); sh_col.addWidget(self.sh_sl)
+        th_row.addLayout(sh_col, stretch=1)
+        lh_col = QVBoxLayout(); lh_col.setSpacing(2)
+        lh_hdr = QHBoxLayout()
+        lh_lbl = QLabel("Long Hold"); lh_lbl.setStyleSheet("font-size:11px;color:#ffaa00;border:none;font-weight:600;")
+        lh_hdr.addWidget(lh_lbl); lh_hdr.addStretch()
+        self.lh_val = QLabel("600 ms"); self.lh_val.setStyleSheet("font-family:Consolas;font-size:11px;color:#ffaa00;border:none;")
+        lh_hdr.addWidget(self.lh_val); lh_col.addLayout(lh_hdr)
+        self.lh_sl = QSlider(Qt.Orientation.Horizontal); self.lh_sl.setRange(200,3000); self.lh_sl.setSingleStep(50); self.lh_sl.setValue(600)
+        self.lh_sl.setStyleSheet("QSlider::handle:horizontal{background:#ffaa00;border:2px solid #16161f;}")
+        self.lh_sl.valueChanged.connect(lambda v: self.lh_val.setText(f"{v} ms")); lh_col.addWidget(self.lh_sl)
+        th_row.addLayout(lh_col, stretch=1); ly.addLayout(th_row)
+        ito_row = QHBoxLayout(); ito_row.addWidget(self._lbl("Symbol Timeout")); ito_row.addStretch()
+        self.timeout_val = QLabel("1500 ms"); self.timeout_val.setStyleSheet("font-family:Consolas;font-size:11px;color:#555570;border:none;")
+        ito_row.addWidget(self.timeout_val); ly.addLayout(ito_row)
+        self.timeout_sl = QSlider(Qt.Orientation.Horizontal); self.timeout_sl.setRange(300,5000); self.timeout_sl.setSingleStep(100); self.timeout_sl.setValue(1500)
+        self.timeout_sl.setStyleSheet("QSlider::handle:horizontal{background:#ffaa00;border:2px solid #16161f;}")
+        self.timeout_sl.valueChanged.connect(lambda v: self.timeout_val.setText(f"{v} ms")); ly.addWidget(self.timeout_sl)
+        sep = QFrame(); sep.setFrameShape(QFrame.Shape.HLine); sep.setStyleSheet("color:#2a2a3a;"); ly.addWidget(sep)
+        patr_hdr = QHBoxLayout(); patr_hdr.addWidget(self._lbl("Morse Patterns \u2192 Actions")); patr_hdr.addStretch()
+        add_pat_btn = QPushButton("+ Pattern"); add_pat_btn.setFixedHeight(22)
+        add_pat_btn.setStyleSheet("font-size:10px;padding:2px 8px;border:1px dashed #ff884455;color:#ff8844;border-radius:4px;background:transparent;")
+        add_pat_btn.clicked.connect(self.add_pattern_row); patr_hdr.addWidget(add_pat_btn); ly.addLayout(patr_hdr)
+        self.patterns_layout = QVBoxLayout(); self.patterns_layout.setContentsMargins(0,0,0,0); self.patterns_layout.setSpacing(3)
+        ly.addLayout(self.patterns_layout); self.pattern_rows = []
+        sep2 = QFrame(); sep2.setFrameShape(QFrame.Shape.HLine); sep2.setStyleSheet("color:#2a2a3a;"); ly.addWidget(sep2)
+        prog_hdr = QHBoxLayout(); prog_hdr.addWidget(self._lbl("Live Morse Input")); prog_hdr.addStretch()
+        self.reset_btn = QPushButton("\u2715 Reset"); self.reset_btn.setFixedHeight(20)
+        self.reset_btn.setStyleSheet("font-size:10px;padding:1px 6px;border:1px solid #2a2a3a;color:#555570;border-radius:3px;background:transparent;")
+        prog_hdr.addWidget(self.reset_btn); ly.addLayout(prog_hdr)
+        self.progress_widget = MorseProgressWidget(); ly.addWidget(self.progress_widget)
+
+    def _lbl(self, t):
+        l = QLabel(t); l.setStyleSheet("font-size:11px;border:none;"); return l
+    def _on_gesture_changed(self):
+        new_gid = self.gcb.currentData() or ''
+        old_gid = self._cur_gesture
+        if old_gid == new_gid: return
+        if old_gid: self.gesture_released.emit(old_gid)
+        self._cur_gesture = new_gid
+        if new_gid: self.gesture_claimed.emit(new_gid)
+    def gesture_id(self): return self.gcb.currentData() or ''
+    def get_all_gesture_ids(self):
+        gid = self.gesture_id(); return {gid} if gid else set()
+    def add_pattern_row(self):
+        row = MorsePatternRow(); row.removed.connect(self._remove_pattern_row)
+        self.pattern_rows.append(row); self.patterns_layout.addWidget(row)
+    def _remove_pattern_row(self, row):
+        if row in self.pattern_rows:
+            self.pattern_rows.remove(row); self.patterns_layout.removeWidget(row); row.deleteLater()
+    def get_patterns(self):
+        return [(row.get_pattern(), row.get_action_state()) for row in self.pattern_rows if row.get_pattern()]
+    def get_state(self):
+        return dict(type='morse', gesture=self.gesture_id(), short_ms=self.sh_sl.value(),
+            long_ms=self.lh_sl.value(), timeout=self.timeout_sl.value(),
+            patterns=[row.get_state() for row in self.pattern_rows])
+    def set_state(self, s):
+        gid = s.get('gesture', '')
+        for i in range(self.gcb.count()):
+            if self.gcb.itemData(i) == gid: self.gcb.setCurrentIndex(i); break
+        self.sh_sl.setValue(s.get('short_ms', 200)); self.lh_sl.setValue(s.get('long_ms', 600))
+        self.timeout_sl.setValue(s.get('timeout', 1500))
+        for r in list(self.pattern_rows): self._remove_pattern_row(r)
+        for ps in s.get('patterns', []): self.add_pattern_row(); self.pattern_rows[-1].set_state(ps)
+    def set_progress(self, completed, in_progress_frac, active):
+        self.progress_widget.set_state(completed, in_progress_frac, active)
+    def flash_match(self): self.progress_widget.flash_match()
+    def connect_reset(self, slot): self.reset_btn.clicked.connect(slot)
+
+
+# ÃƒÂ¢Ã¢â‚¬Â¢Ã‚ÂÃƒÂ¢Ã¢â‚¬Â¢Ã‚ÂÃƒÂ¢Ã¢â‚¬Â¢Ã‚Â GESTURE CARD ÃƒÂ¢Ã¢â‚¬Â¢Ã‚ÂÃƒÂ¢Ã¢â‚¬Â¢Ã‚ÂÃƒÂ¢Ã¢â‚¬Â¢Ã‚Â
 
 def _sens_mult(v):
     """Slider 1-100 -> multiplier. 1=0.2x, 50=1.0x, 100=3.0x."""
@@ -1010,7 +1296,7 @@ class GestureCard(QFrame):
         self.ac.setCurrentIndex(0); self.ke.clear(); self.ce.clear(); self.me.clear()
         self.tm.setCurrentIndex(0)
 
-# â•â•â• MAIN WINDOW â•â•â•
+# ÃƒÂ¢Ã¢â‚¬Â¢Ã‚ÂÃƒÂ¢Ã¢â‚¬Â¢Ã‚ÂÃƒÂ¢Ã¢â‚¬Â¢Ã‚Â MAIN WINDOW ÃƒÂ¢Ã¢â‚¬Â¢Ã‚ÂÃƒÂ¢Ã¢â‚¬Â¢Ã‚ÂÃƒÂ¢Ã¢â‚¬Â¢Ã‚Â
 
 class MainWindow(QMainWindow):
     def __init__(self):
@@ -1028,6 +1314,7 @@ class MainWindow(QMainWindow):
         self.cards={}; self.rbars={}; self.rvals={}
         # Gesture chains
         self.chains = []          # list of GestureChainCard widgets
+        self.morse_chains = []    # list of MorseChainCard widgets
         self.chain_counter = 0    # for unique chain IDs
         self.chain_state = {}     # chain_id -> {step:int, last_time:float, prev_active:set}
         self._build()
@@ -1043,7 +1330,7 @@ class MainWindow(QMainWindow):
         hl.addWidget(logo)
         t=QLabel("FaceCommand"); t.setStyleSheet("font-family:Consolas;font-weight:600;font-size:14px;")
         hl.addWidget(t)
-        v=QLabel("v1.3 native"); v.setStyleSheet("color:#555570;font-size:11px;"); hl.addWidget(v); hl.addStretch()
+        v=QLabel("v1.4 native"); v.setStyleSheet("color:#555570;font-size:11px;"); hl.addWidget(v); hl.addStretch()
         self.stl=QLabel(); self._ss("Camera Off","#ff4466"); hl.addWidget(self.stl)
         self.rcb=QPushButton("\u27F3 Recalibrate"); self.rcb.setMinimumWidth(100); self.rcb.clicked.connect(self._recal); self.rcb.hide(); hl.addWidget(self.rcb)
         self.cb=QPushButton("\u25B6 Start Camera"); self.cb.setMinimumWidth(140); self.cb.clicked.connect(self._tc); hl.addWidget(self.cb)
@@ -1127,11 +1414,16 @@ class MainWindow(QMainWindow):
         self.add_chain_btn.setStyleSheet("font-size:11px;padding:4px 12px;border:1px solid #ffaa00;color:#ffaa00;border-radius:6px;background:#ffaa0015;font-weight:600;")
         self.add_chain_btn.clicked.connect(self._add_chain)
         chain_hdr.addWidget(self.add_chain_btn)
+        self.add_morse_btn = QPushButton("\u2505 Add Morse Chain")
+        self.add_morse_btn.setFixedHeight(28)
+        self.add_morse_btn.setStyleSheet("font-size:11px;padding:4px 12px;border:1px solid #ff8844;color:#ff8844;border-radius:6px;background:#ff884415;font-weight:600;")
+        self.add_morse_btn.clicked.connect(self._add_morse_chain)
+        chain_hdr.addWidget(self.add_morse_btn)
         rl.addLayout(chain_hdr)
 
         self.chains_layout = QVBoxLayout(); self.chains_layout.setContentsMargins(0,0,0,0); self.chains_layout.setSpacing(8)
         rl.addLayout(self.chains_layout)
-        self.no_chains_lbl = QLabel("No gesture chains defined. Click above to create one.")
+        self.no_chains_lbl = QLabel("No gesture chains or morse chains defined.")
         self.no_chains_lbl.setStyleSheet("font-size:11px;color:#555570;font-style:italic;padding:8px 0;border:none;")
         self.no_chains_lbl.setAlignment(Qt.AlignmentFlag.AlignCenter)
         rl.addWidget(self.no_chains_lbl)
@@ -1141,7 +1433,7 @@ class MainWindow(QMainWindow):
         for i,g in enumerate(GESTURES):
             card=GestureCard(g); self.cards[g['id']]=card; grid.addWidget(card, i//2, i%2)
         rl.addLayout(grid)
-        # Default: Right Eyebrow → The Rock
+        # Default: Right Eyebrow Ã¢â€ â€™ The Rock
         for i in range(self.cards['eyebrow_raise_right'].ac.count()):
             if self.cards['eyebrow_raise_right'].ac.itemData(i) == 'the_rock':
                 self.cards['eyebrow_raise_right'].ac.setCurrentIndex(i); break
@@ -1151,7 +1443,7 @@ class MainWindow(QMainWindow):
         gcl=QVBoxLayout(gc); gcl.setContentsMargins(14,14,14,14); gcl.setSpacing(6)
         self.sms = self._gslider(gcl,"Smoothing",1,15,9)
         self.cds = self._gslider(gcl,"Cooldown (ms)",50,1500,650,50)
-        self.hds = self._gslider(gcl,"Hold Time (ms)",50,500,200,25)
+        self.hds = self._gslider(gcl,"Hold Time (ms)",5,500,200,25)
         self.pcs = self._gslider(gcl,"Tilt Compensation",0,100,35)
         rl.addWidget(gc); rl.addStretch()
         rsc.setWidget(rwid); sp.addWidget(rsc); sp.setSizes([320,880]); root.addWidget(sp,stretch=1)
@@ -1191,7 +1483,8 @@ class MainWindow(QMainWindow):
         self.hold_active={k:False for k in self.hold_active}
         self.toggle_state={k:False for k in self.toggle_state}
         self.repeat_lt={k:0.0 for k in self.repeat_lt}
-        self.chain_state={}; self._chain_hs={g['id']:0.0 for g in GESTURES}
+        self.chain_state={}; self._mc_hs={}; self._mc_buf={}; self._mc_last={}; self._mc_active={}
+        self._chain_hs={g['id']:0.0 for g in GESTURES}
         self._chain_ta={g['id']:False for g in GESTURES}; self._chain_newly=set()
         self.cam=CameraThread(); self.cam.frame_ready.connect(self._of)
         self.cam.status_changed.connect(lambda t: self._ss(t,"#ffaa00"))
@@ -1354,7 +1647,7 @@ class MainWindow(QMainWindow):
         ac=sum(1 for g in GESTURES if self.cards[g['id']].get_state()['enabled'])
         self.al.setText(f"Active: {ac}/{len(GESTURES)}")
 
-        # ── Chain sequence detection ──
+        # Ã¢â€â‚¬Ã¢â€â‚¬ Chain sequence detection Ã¢â€â‚¬Ã¢â€â‚¬
         if self.chains:
             ht_chain = self.hds.value()
             # Detect gesture activations for chain matching (works even for disabled individual cards)
@@ -1415,6 +1708,53 @@ class MainWindow(QMainWindow):
                 # Update chain progress indicator
                 chain.set_progress(cs['step'], len(seq))
 
+
+        # -- Morse Chain detection --
+        if self.morse_chains:
+            if not hasattr(self, '_mc_hs'): self._mc_hs = {}
+            if not hasattr(self, '_mc_buf'): self._mc_buf = {}
+            if not hasattr(self, '_mc_last'): self._mc_last = {}
+            if not hasattr(self, '_mc_active'): self._mc_active = {}
+            for chain in self.morse_chains:
+                cid = chain.chain_id; gid = chain.gesture_id()
+                if not gid: continue
+                val = self.lv.get(gid, 0)
+                card_s = self.cards[gid].get_state(); th = card_s['thresholdMin']
+                short_ms = chain.sh_sl.value(); long_ms = chain.lh_sl.value(); timeout_ms = chain.timeout_sl.value()
+                if cid not in self._mc_hs: self._mc_hs[cid] = 0.0
+                if cid not in self._mc_buf: self._mc_buf[cid] = []
+                if cid not in self._mc_last: self._mc_last[cid] = 0.0
+                if cid not in self._mc_active: self._mc_active[cid] = False
+                was_active = self._mc_active[cid]; buf = self._mc_buf[cid]
+                if not was_active and buf and (now_ms - self._mc_last[cid]) > timeout_ms:
+                    self._mc_buf[cid] = []; buf = []; chain.set_progress([], 0.0, False)
+                if val >= th:
+                    if not was_active: self._mc_hs[cid] = now_ms; self._mc_active[cid] = True
+                    held = now_ms - self._mc_hs[cid]
+                    if held < short_ms: frac = held / short_ms * 0.5
+                    elif held < long_ms: frac = 0.5 + (held - short_ms) / max(1, long_ms - short_ms) * 0.5
+                    else: frac = 1.0
+                    chain.set_progress(buf, frac, True)
+                else:
+                    if was_active:
+                        self._mc_active[cid] = False; held = now_ms - self._mc_hs[cid]; self._mc_hs[cid] = 0.0
+                        if held >= short_ms:
+                            sym = 'L' if held >= long_ms else 'S'; buf.append(sym); self._mc_last[cid] = now_ms
+                            matched = False
+                            for pat, a_state in chain.get_patterns():
+                                if buf == pat:
+                                    self._mc_buf[cid] = []; buf = []; chain.flash_match()
+                                    self.dc += 1; self.dl.setText(f"Detections: {self.dc}")
+                                    threading.Thread(target=execute_action,
+                                        args=(a_state['action'], a_state['keyBind'], a_state['command'], a_state['macro']),
+                                        daemon=True).start()
+                                    self._logit(f"\u2505{chain.name_lbl.text()}", a_state['action'], a_state['keyBind'], a_state['macro'], mode_tag='MORSE')
+                                    matched = True; break
+                            if not matched:
+                                is_prefix = any(pat[:len(buf)] == buf for pat, _ in chain.get_patterns())
+                                if not is_prefix: self._mc_buf[cid] = []; buf = []
+                    chain.set_progress(buf, 0.0, False)
+
     def _add_chain(self):
         cid = self.chain_counter; self.chain_counter += 1
         chain = GestureChainCard(cid)
@@ -1438,6 +1778,39 @@ class MainWindow(QMainWindow):
             chain.deleteLater()
             self._update_no_chains_label()
 
+    def _add_morse_chain(self):
+        cid = self.chain_counter; self.chain_counter += 1
+        chain = MorseChainCard(cid)
+        chain.chain_deleted.connect(self._remove_morse_chain)
+        chain.gesture_claimed.connect(self._on_gesture_claimed)
+        chain.gesture_released.connect(self._on_gesture_released)
+        chain.connect_reset(lambda cid=cid: self._reset_morse_chain(cid))
+        self.morse_chains.append(chain)
+        self.chains_layout.addWidget(chain)
+        self._update_no_chains_label()
+
+    def _remove_morse_chain(self, chain):
+        if chain in self.morse_chains:
+            for gid in chain.get_all_gesture_ids():
+                self._on_gesture_released(gid)
+            cid = chain.chain_id
+            for d in (getattr(self, '_mc_hs', {}), getattr(self, '_mc_buf', {}),
+                      getattr(self, '_mc_last', {}), getattr(self, '_mc_active', {})):
+                d.pop(cid, None)
+            self.morse_chains.remove(chain)
+            self.chains_layout.removeWidget(chain)
+            chain.deleteLater()
+            self._update_no_chains_label()
+
+    def _reset_morse_chain(self, cid):
+        for d in (getattr(self, '_mc_buf', {}), getattr(self, '_mc_hs', {}),
+                  getattr(self, '_mc_last', {}), getattr(self, '_mc_active', {})):
+            if cid in d:
+                if isinstance(d[cid], list): d[cid] = []
+                else: d[cid] = 0.0 if isinstance(d[cid], float) else False
+        for chain in self.morse_chains:
+            if chain.chain_id == cid: chain.set_progress([], 0.0, False); break
+
     def _on_gesture_claimed(self, gid):
         """A chain claimed a gesture - disable its individual card."""
         if gid in self.cards:
@@ -1446,16 +1819,15 @@ class MainWindow(QMainWindow):
     def _on_gesture_released(self, gid):
         """A chain released a gesture - re-enable if no other chain uses it."""
         if not gid: return
-        # Check if any remaining chain still uses this gesture
         for chain in self.chains:
-            if gid in chain.get_all_gesture_ids():
-                return  # still in use
-        # No chain uses it anymore, re-enable
+            if gid in chain.get_all_gesture_ids(): return
+        for chain in self.morse_chains:
+            if gid in chain.get_all_gesture_ids(): return
         if gid in self.cards:
             self.cards[gid].en.setChecked(True)
 
     def _update_no_chains_label(self):
-        self.no_chains_lbl.setVisible(len(self.chains) == 0)
+        self.no_chains_lbl.setVisible(len(self.chains) == 0 and len(self.morse_chains) == 0)
 
     def _logit(self,gn,at,kb='',macro='',mode_tag=''):
         ts=datetime.now().strftime('%H:%M:%S')
@@ -1468,8 +1840,9 @@ class MainWindow(QMainWindow):
         self.logl.setText('<br>'.join(list(self.alog)[:8]))
 
     def _exp(self):
-        cfg={'version':'0.4.0','gestures':{gid:c.get_state() for gid,c in self.cards.items()},
+        cfg={'version':'0.5.0','gestures':{gid:c.get_state() for gid,c in self.cards.items()},
              'chains':[c.get_state() for c in self.chains],
+             'morse_chains':[c.get_state() for c in self.morse_chains],
              'global':{'smoothing':self.sms.value(),'cooldown':self.cds.value(),'holdTime':self.hds.value(),'tiltComp':self.pcs.value(),'zoom':self.zs.value(),'panX':self.pxs.value(),'panY':self.pys.value()}}
         p,_=QFileDialog.getSaveFileName(self,"Export","gestures_config.json","JSON (*.json)")
         if p:
@@ -1485,10 +1858,15 @@ class MainWindow(QMainWindow):
                     if gid in self.cards: self.cards[gid].set_state(s)
             # Remove existing chains first
             for ch in list(self.chains): self._remove_chain(ch)
+            for ch in list(self.morse_chains): self._remove_morse_chain(ch)
             if 'chains' in cfg:
                 for cs in cfg['chains']:
                     self._add_chain()
                     self.chains[-1].set_state(cs)
+            if 'morse_chains' in cfg:
+                for cs in cfg['morse_chains']:
+                    self._add_morse_chain()
+                    self.morse_chains[-1].set_state(cs)
             if 'global' in cfg:
                 g=cfg['global']; self.sms.setValue(g.get('smoothing',9))
                 self.cds.setValue(g.get('cooldown',650)); self.hds.setValue(g.get('holdTime',200))
@@ -1499,13 +1877,14 @@ class MainWindow(QMainWindow):
     def _rst(self):
         # Remove all chains
         for ch in list(self.chains): self._remove_chain(ch)
+        for ch in list(self.morse_chains): self._remove_morse_chain(ch)
         for c in self.cards.values(): c.reset_def()
         self.sms.setValue(9); self.cds.setValue(650); self.hds.setValue(200); self.pcs.setValue(35)
         self.zs.setValue(100); self.pxs.setValue(0); self.pys.setValue(0)
 
     def closeEvent(self,e): self._release_all_holds(); self._stop(); e.accept()
 
-# â•â•â• ENTRY â•â•â•
+# ÃƒÂ¢Ã¢â‚¬Â¢Ã‚ÂÃƒÂ¢Ã¢â‚¬Â¢Ã‚ÂÃƒÂ¢Ã¢â‚¬Â¢Ã‚Â ENTRY ÃƒÂ¢Ã¢â‚¬Â¢Ã‚ÂÃƒÂ¢Ã¢â‚¬Â¢Ã‚ÂÃƒÂ¢Ã¢â‚¬Â¢Ã‚Â
 
 if __name__ == '__main__':
     try:
