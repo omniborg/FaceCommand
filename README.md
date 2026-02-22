@@ -49,7 +49,7 @@ Global settings for:
   
   -head tilt compensation (in progress)
   
-Each gesture has its own trigger thresholds and sensitivity (in progress)
+Each gesture has its own trigger thresholds and sensitivity 
   
   -trigger actions can be key presses, mouse functions, and macros that combine both
   
