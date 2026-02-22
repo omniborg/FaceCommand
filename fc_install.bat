@@ -13,10 +13,10 @@ cd /d "%~dp0"
 title FaceCommand
 echo.
 echo  Installing dependencies...
-python -m pip install PyQt6 opencv-python mediapipe numpy --quiet
+py -3.12 -m pip install PyQt6 opencv-python==4.10.0.84 mediapipe==0.10.31 numpy==1.26.4 --quiet
 echo.
 echo  Starting FaceCommand (Administrator)...
 echo.
-python facecommand.py
+py -3.12 facecommand.py
 echo.
 pause

@@ -311,7 +311,9 @@ class GestureDetector:
     @property
     def cal_pct(self): return int(min(100, self.cal_n/CAL_N*100))
 
-    def compute(self, lm, tilt_comp=35):
+    def compute(self, lm, tilt_comp=35, sens=None):
+        """sens: dict of gesture_id -> multiplier. >1 = less motion needed, <1 = more motion needed."""
+        if sens is None: sens = {}
         raw = {}
         fw = _dist(lm[LEFT_CHEEK],lm[RIGHT_CHEEK])
         fh = _dist(lm[NOSE_TIP],lm[CHIN])
@@ -329,10 +331,10 @@ class GestureDetector:
                 le = le + max(0, l_gy - 0.5) * 2 * COMP
                 re = re + max(0, r_gy - 0.5) * 2 * COMP
 
-        raw['blink'] = max(0,min(100,(1-(((le+re)/2)-0.05)/0.30)*100))
+        raw['blink'] = max(0,min(100,(1-(((le+re)/2)-0.05)/(0.30/sens.get('blink',1.0)))*100))
         log_ratio = math.log((le + 0.001) / (re + 0.001))
-        raw['wink_left'] = max(0, min(100, -log_ratio / 0.6 * 100))
-        raw['wink_right'] = max(0, min(100, log_ratio / 0.6 * 100))
+        raw['wink_left'] = max(0, min(100, -log_ratio / (0.6/sens.get('wink_left',1.0)) * 100))
+        raw['wink_right'] = max(0, min(100, log_ratio / (0.6/sens.get('wink_right',1.0)) * 100))
 
         hairline = lm[10]
         ref_len = fw + 0.0001
@@ -391,12 +393,12 @@ class GestureDetector:
             pitch_dev = pitch_indicator - self.bl['pitch']
             pitch_comp = pitch_dev * -(tilt_comp / 100.0)
 
-            raw_left = max(0,min(100,(self.bl['lbr']-(lbr - pitch_comp))/0.03*100))
-            raw_right = max(0,min(100,(self.bl['rbr']-(rbr - pitch_comp))/0.03*100))
+            raw_left = max(0,min(100,(self.bl['lbr']-(lbr - pitch_comp))/(0.03/sens.get('eyebrow_raise_left',1.0))*100))
+            raw_right = max(0,min(100,(self.bl['rbr']-(rbr - pitch_comp))/(0.03/sens.get('eyebrow_raise_right',1.0))*100))
 
             both_threshold = 85
             if raw_left >= both_threshold and raw_right >= both_threshold:
-                raw['eyebrow_raise'] = max(0,min(100,(self.bl['br']-(br - pitch_comp))/0.03*100))
+                raw['eyebrow_raise'] = max(0,min(100,(self.bl['br']-(br - pitch_comp))/(0.03/sens.get('eyebrow_raise',1.0))*100))
                 raw['eyebrow_raise_left'] = 0; raw['eyebrow_raise_right'] = 0
             else:
                 raw['eyebrow_raise'] = 0
@@ -404,34 +406,36 @@ class GestureDetector:
 
             # Smile: corners rise + upper lip rises + mouth widens
             # All three go negative (toward nose) when smiling
-            corner_rise = (self.bl['corner_nose'] - corner_to_nose) / 0.04   # corners moved up
-            upper_rise = (self.bl['ul_nose'] - upper_lip_to_nose) / 0.03     # upper lip moved up
-            width_inc = (sr - self.bl['sr']) / 0.10                           # mouth widened
+            s_sm = sens.get('smile', 1.0)
+            corner_rise = (self.bl['corner_nose'] - corner_to_nose) / (0.04/s_sm)
+            upper_rise = (self.bl['ul_nose'] - upper_lip_to_nose) / (0.03/s_sm)
+            width_inc = (sr - self.bl['sr']) / (0.10/s_sm)
             raw['smile'] = max(0, min(100, (corner_rise*0.40 + upper_rise*0.25 + width_inc*0.35) * 100))
 
             # Mouth open: lower lip drops away from nose (jaw drops)
-            lower_drop = (lower_lip_to_nose - self.bl['ll_nose']) / 0.06     # lower lip moved down
+            lower_drop = (lower_lip_to_nose - self.bl['ll_nose']) / (0.06/sens.get('mouth_open',1.0))
             raw['mouth_open'] = max(0, min(100, lower_drop * 100))
             # Suppress mouth_open when smiling strongly (smile pulls lower lip slightly)
             if raw['smile'] > 50:
                 raw['mouth_open'] = max(0, raw['mouth_open'] - raw['smile'] * 0.3)
 
             # Pucker: purely mouth width narrowing
-            w_shrink = (self.bl['pucker_w'] - pucker_width) / 0.05  # narrower = positive
+            w_shrink = (self.bl['pucker_w'] - pucker_width) / (0.05/sens.get('pucker',1.0))
             raw_pucker = max(0, min(100, w_shrink * 100))
             if raw['smile'] > 40 or raw['mouth_open'] > 40: raw_pucker *= 0.2
             raw['pucker'] = max(0, min(100, raw_pucker))
 
             # Smirk: mouth corner asymmetry
             asym_dev = mouth_asym - self.bl['mouth_asym']
-            raw['smirk_left'] = max(0, min(100, asym_dev / 0.025 * 100))    # left corner up
-            raw['smirk_right'] = max(0, min(100, -asym_dev / 0.025 * 100))  # right corner up
+            raw['smirk_left'] = max(0, min(100, asym_dev / (0.025/sens.get('smirk_left',1.0)) * 100))
+            raw['smirk_right'] = max(0, min(100, -asym_dev / (0.025/sens.get('smirk_right',1.0)) * 100))
 
             # Brow furrow: pitch-robust via brow-to-eye-corner gap
             # Apply pitch compensation: tilting forward shrinks brow_eye_gap artificially
+            s_bf = sens.get('brow_furrow', 1.0)
             compensated_brow_eye_gap = brow_eye_gap - pitch_comp * 0.5
-            brow_drop = (compensated_brow_eye_gap - self.bl['brow_eye_gap']) / 0.015
-            gap_shrink = (self.bl['brow_gap'] - brow_inner_gap) / 0.03
+            brow_drop = (compensated_brow_eye_gap - self.bl['brow_eye_gap']) / (0.015/s_bf)
+            gap_shrink = (self.bl['brow_gap'] - brow_inner_gap) / (0.03/s_bf)
             raw_furrow = max(0, min(100, (brow_drop*0.55 + gap_shrink*0.45) * 100))
             if raw['eyebrow_raise'] > 30 or raw_left > 30 or raw_right > 30:
                 raw_furrow *= 0.1
@@ -447,13 +451,31 @@ class GestureDetector:
 
 # ÃƒÂ¢Ã¢â‚¬Â¢Ã‚ÂÃƒÂ¢Ã¢â‚¬Â¢Ã‚ÂÃƒÂ¢Ã¢â‚¬Â¢Ã‚Â CAMERA THREAD ÃƒÂ¢Ã¢â‚¬Â¢Ã‚ÂÃƒÂ¢Ã¢â‚¬Â¢Ã‚ÂÃƒÂ¢Ã¢â‚¬Â¢Ã‚Â
 
+def enumerate_cameras(max_test=8):
+    """Probe camera indices and return list of (index, backend, name) tuples.
+    Lists all cameras that can be opened, even if initial read fails (MSMF bug)."""
+    results = []
+    for idx in range(max_test):
+        for backend, bname in [(cv2.CAP_MSMF, 'MSMF'), (cv2.CAP_DSHOW, 'DSHOW')]:
+            try:
+                cap = cv2.VideoCapture(idx, backend)
+                if cap.isOpened():
+                    cap.release()
+                    label = f"Camera {idx}"
+                    results.append((idx, backend, label))
+                    break
+            except: pass
+    return results
+
 class CameraThread(QThread):
     frame_ready = pyqtSignal(object, object, float)
     status_changed = pyqtSignal(str)
     error = pyqtSignal(str)
 
-    def __init__(self):
+    def __init__(self, cam_index=0, cam_backend=None):
         super().__init__(); self._running=False; self._mx=QMutex()
+        self._cam_index = cam_index
+        self._cam_backend = cam_backend
 
     def stop(self):
         with QMutexLocker(self._mx): self._running=False
@@ -461,35 +483,33 @@ class CameraThread(QThread):
     def run(self):
         self._running = True
         self.status_changed.emit("Opening camera...")
-        cap = cv2.VideoCapture(0)
+        if self._cam_backend is not None:
+            cap = cv2.VideoCapture(self._cam_index, self._cam_backend)
+        else:
+            cap = cv2.VideoCapture(self._cam_index)
         if not cap.isOpened():
             self.error.emit("Could not open camera"); return
         cap.set(cv2.CAP_PROP_FRAME_WIDTH,640); cap.set(cv2.CAP_PROP_FRAME_HEIGHT,480)
         cap.set(cv2.CAP_PROP_FPS,60)
         fm = None; mode = None
         try:
-            fm = mp.solutions.face_mesh.FaceMesh(max_num_faces=1, refine_landmarks=True,
-                min_detection_confidence=0.5, min_tracking_confidence=0.5)
-            mode = 'legacy'; self.status_changed.emit("Camera ready")
-        except (AttributeError, ImportError, TypeError):
-            try:
-                from mediapipe.tasks import python as mpt
-                from mediapipe.tasks.python import vision
-                mp_path = os.path.join(os.path.dirname(os.path.abspath(__file__)),'face_landmarker.task')
-                if not os.path.exists(mp_path):
-                    self.status_changed.emit("Downloading face model...")
-                    import urllib.request
-                    urllib.request.urlretrieve("https://storage.googleapis.com/mediapipe-models/face_landmarker/face_landmarker/float16/latest/face_landmarker.task", mp_path)
-                opts = vision.FaceLandmarkerOptions(
-                    base_options=mpt.BaseOptions(model_asset_path=mp_path),
-                    running_mode=vision.RunningMode.IMAGE, num_faces=1,
-                    min_face_detection_confidence=0.5, min_face_presence_confidence=0.5,
-                    min_tracking_confidence=0.5, output_face_blendshapes=False,
-                    output_facial_transformation_matrixes=False)
-                fm = vision.FaceLandmarker.create_from_options(opts)
-                mode = 'tasks'; self.status_changed.emit("Camera ready")
-            except Exception as e:
-                self.error.emit(str(e)); cap.release(); return
+            from mediapipe.tasks import python as mpt
+            from mediapipe.tasks.python import vision
+            mp_path = os.path.join(os.path.dirname(os.path.abspath(__file__)),'face_landmarker.task')
+            if not os.path.exists(mp_path):
+                self.status_changed.emit("Downloading face model...")
+                import urllib.request
+                urllib.request.urlretrieve("https://storage.googleapis.com/mediapipe-models/face_landmarker/face_landmarker/float16/latest/face_landmarker.task", mp_path)
+            opts = vision.FaceLandmarkerOptions(
+                base_options=mpt.BaseOptions(model_asset_path=mp_path),
+                running_mode=vision.RunningMode.IMAGE, num_faces=1,
+                min_face_detection_confidence=0.5, min_face_presence_confidence=0.5,
+                min_tracking_confidence=0.5, output_face_blendshapes=False,
+                output_facial_transformation_matrixes=False)
+            fm = vision.FaceLandmarker.create_from_options(opts)
+            mode = 'tasks'; self.status_changed.emit("Camera ready")
+        except Exception as e:
+            self.error.emit(f"MediaPipe init failed: {e}"); cap.release(); return
 
         fc=0; ft=time.time(); fps=0.0
         while True:
@@ -1332,6 +1352,18 @@ class MainWindow(QMainWindow):
         hl.addWidget(t)
         v=QLabel("v1.4 native"); v.setStyleSheet("color:#555570;font-size:11px;"); hl.addWidget(v); hl.addStretch()
         self.stl=QLabel(); self._ss("Camera Off","#ff4466"); hl.addWidget(self.stl)
+        # Camera selector
+        self.cam_cb=QComboBox(); self.cam_cb.setMinimumWidth(200); self.cam_cb.setFixedHeight(28)
+        self.cam_cb.setStyleSheet("QComboBox{background:#1e1e2a;border:1px solid #2a2a3a;border-radius:6px;color:#e8e8f0;padding:3px 8px;font-size:11px;}")
+        self.cam_cb.addItem("Scanning cameras...", None)
+        hl.addWidget(self.cam_cb)
+        self.rescan_btn=QPushButton("\u27F3"); self.rescan_btn.setFixedSize(28,28)
+        self.rescan_btn.setStyleSheet("font-size:13px;padding:0;border:1px solid #2a2a3a;border-radius:6px;background:#1e1e2a;color:#00d4ff;")
+        self.rescan_btn.setToolTip("Rescan cameras")
+        self.rescan_btn.clicked.connect(self._rescan_cameras)
+        hl.addWidget(self.rescan_btn)
+        self._available_cams = []
+        threading.Thread(target=self._scan_cameras, daemon=True).start()
         self.rcb=QPushButton("\u27F3 Recalibrate"); self.rcb.setMinimumWidth(100); self.rcb.clicked.connect(self._recal); self.rcb.hide(); hl.addWidget(self.rcb)
         self.cb=QPushButton("\u25B6 Start Camera"); self.cb.setMinimumWidth(140); self.cb.clicked.connect(self._tc); hl.addWidget(self.cb)
         self._set_btn_primary()
@@ -1478,7 +1510,32 @@ class MainWindow(QMainWindow):
     def _tc(self):
         if self.cam and self.cam.isRunning(): self._stop()
         else: self._start()
+    def _scan_cameras(self):
+        """Scan for available cameras in background thread."""
+        cams = enumerate_cameras()
+        self._available_cams = cams
+        from PyQt6.QtCore import QMetaObject
+        QMetaObject.invokeMethod(self, "_populate_cameras", Qt.ConnectionType.QueuedConnection)
+
+    @pyqtSlot()
+    def _populate_cameras(self):
+        self.cam_cb.clear()
+        if not self._available_cams:
+            self.cam_cb.addItem("No cameras found", None)
+        else:
+            for idx, backend, name in self._available_cams:
+                self.cam_cb.addItem(f"\U0001F4F7 {name}", (idx, backend))
+
+    def _rescan_cameras(self):
+        self.cam_cb.clear()
+        self.cam_cb.addItem("Scanning cameras...", None)
+        threading.Thread(target=self._scan_cameras, daemon=True).start()
+
     def _start(self):
+        cam_data = self.cam_cb.currentData()
+        if cam_data is None:
+            self._ss("No camera selected", "#ff4466"); return
+        cam_index, cam_backend = cam_data
         self.det.reset(); self.sm={k:0 for k in self.sm}
         self.hold_active={k:False for k in self.hold_active}
         self.toggle_state={k:False for k in self.toggle_state}
@@ -1486,7 +1543,7 @@ class MainWindow(QMainWindow):
         self.chain_state={}; self._mc_hs={}; self._mc_buf={}; self._mc_last={}; self._mc_active={}
         self._chain_hs={g['id']:0.0 for g in GESTURES}
         self._chain_ta={g['id']:False for g in GESTURES}; self._chain_newly=set()
-        self.cam=CameraThread(); self.cam.frame_ready.connect(self._of)
+        self.cam=CameraThread(cam_index, cam_backend); self.cam.frame_ready.connect(self._of)
         self.cam.status_changed.connect(lambda t: self._ss(t,"#ffaa00"))
         self.cam.error.connect(lambda e: self._ss(e,"#ff4466")); self.cam.start()
         self.cb.setText("\u25A0 Stop Camera"); self._set_btn_danger(); self.rcb.show()
@@ -1551,16 +1608,16 @@ class MainWindow(QMainWindow):
         self.vl.setPixmap(QPixmap.fromImage(qi).scaled(self.vl.size(),Qt.AspectRatioMode.KeepAspectRatio,Qt.TransformationMode.SmoothTransformation))
 
         if lm is None: self._ss("No Face","#ffaa00"); return
-        raw = self.det.compute(lm, self.pcs.value())
+        # Build per-gesture sensitivity dict from card sliders
+        sens = {}
+        for gid, card in self.cards.items():
+            sens[gid] = _sens_mult(card.ss.value())
+        raw = self.det.compute(lm, self.pcs.value(), sens=sens)
         if not self.det.calibrated: self._ss(f"Calibrating... ({self.det.cal_pct}%)","#ffaa00"); return
         self._ss("Tracking","#00ff88")
 
         alpha = 1-(self.sms.value()/15.0)*0.85
         for gid,val in raw.items():
-            # Apply sensitivity multiplier to the raw reading
-            if gid in self.cards:
-                mult = _sens_mult(self.cards[gid].ss.value())
-                val = max(0, min(100, val * mult))
             self.sm[gid]=self.sm.get(gid,0)*(1-alpha)+val*alpha; self.lv[gid]=self.sm[gid]
 
         for gid in self.lv:
