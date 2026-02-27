@@ -25,6 +25,14 @@ try:
     from PyQt6.QtGui import QImage, QPixmap, QKeySequence
 except ImportError: _missing.append("PyQt6")
 
+# Optional: virtual gamepad support (ViGEmBus + vgamepad)
+_vgamepad_available = False
+try:
+    import vgamepad as vg
+    _vgamepad_available = True
+except ImportError:
+    vg = None
+
 if _missing:
     print(f"Missing: pip install {' '.join(_missing)}")
     input("Press Enter..."); sys.exit(1)
@@ -157,14 +165,16 @@ def execute_mouse_up(action_type):
     f = _MOUSE_UP_FLAGS.get(action_type)
     if f: send_input(make_mouse_input(f))
 
-def execute_hold_start(action_type, key_bind=''):
-    """Start a sustained hold (key down or mouse down)."""
+def execute_hold_start(action_type, key_bind='', gamepad_btn=''):
+    """Start a sustained hold (key down or mouse down or gamepad button down)."""
     if action_type == 'key': execute_key_down(key_bind)
+    elif action_type == 'gamepad_button' and gamepad_btn: execute_gamepad_button_down(gamepad_btn)
     elif action_type in _MOUSE_DOWN_FLAGS: execute_mouse_down(action_type)
 
-def execute_hold_stop(action_type, key_bind=''):
+def execute_hold_stop(action_type, key_bind='', gamepad_btn=''):
     """Release a sustained hold."""
     if action_type == 'key': execute_key_up(key_bind)
+    elif action_type == 'gamepad_button' and gamepad_btn: execute_gamepad_button_up(gamepad_btn)
     elif action_type in _MOUSE_UP_FLAGS: execute_mouse_up(action_type)
 
 def parse_macro(macro_str):
@@ -225,12 +235,13 @@ def execute_macro(macro_str):
                 for m in reversed(mods): send_input(make_key_input(m, True))
         prev_type = step[0]
 
-def execute_action(action_type, key_bind='', command='', macro=''):
-    """Execute a single-fire action (original behavior + macro support)."""
+def execute_action(action_type, key_bind='', command='', macro='', gamepad_btn='', gamepad_axis_id=''):
+    """Execute a single-fire action (original behavior + macro + gamepad support)."""
     if not action_type or action_type == 'none': return
     if action_type == 'key': execute_key_press(key_bind)
     elif action_type == 'macro': execute_macro(macro)
     elif action_type == 'the_rock': play_sound_file('the_rock.mp3')
+    elif action_type == 'gamepad_button' and gamepad_btn: execute_gamepad_button_press(gamepad_btn)
     elif action_type == 'command' and command:
         try: subprocess.Popen(command, shell=True)
         except: pass
@@ -277,6 +288,146 @@ def play_sound_file(filename):
     except Exception as e:
         print(f"[SOUND] ERROR launching PowerShell: {e}")
 
+
+# ••• VIRTUAL GAMEPAD •••
+
+# Xbox 360 button map for vgamepad
+GAMEPAD_BUTTONS = [
+    ('XUSB_GAMEPAD_A', 'A'), ('XUSB_GAMEPAD_B', 'B'), ('XUSB_GAMEPAD_X', 'X'), ('XUSB_GAMEPAD_Y', 'Y'),
+    ('XUSB_GAMEPAD_LEFT_SHOULDER', 'LB'), ('XUSB_GAMEPAD_RIGHT_SHOULDER', 'RB'),
+    ('XUSB_GAMEPAD_BACK', 'Back'), ('XUSB_GAMEPAD_START', 'Start'), ('XUSB_GAMEPAD_GUIDE', 'Guide'),
+    ('XUSB_GAMEPAD_LEFT_THUMB', 'L Stick Click'), ('XUSB_GAMEPAD_RIGHT_THUMB', 'R Stick Click'),
+    ('XUSB_GAMEPAD_DPAD_UP', 'D-Pad Up'), ('XUSB_GAMEPAD_DPAD_DOWN', 'D-Pad Down'),
+    ('XUSB_GAMEPAD_DPAD_LEFT', 'D-Pad Left'), ('XUSB_GAMEPAD_DPAD_RIGHT', 'D-Pad Right'),
+]
+
+# Analog axis map
+GAMEPAD_AXES = [
+    ('left_stick_x', 'Left Stick X', -32768, 32767),
+    ('left_stick_y', 'Left Stick Y', -32768, 32767),
+    ('right_stick_x', 'Right Stick X', -32768, 32767),
+    ('right_stick_y', 'Right Stick Y', -32768, 32767),
+    ('left_trigger', 'Left Trigger', 0, 255),
+    ('right_trigger', 'Right Trigger', 0, 255),
+]
+
+
+class VirtualGamepad:
+    """Singleton wrapper around vgamepad Xbox360 controller."""
+    _instance = None
+    _lock = threading.Lock()
+
+    @classmethod
+    def get(cls):
+        if not _vgamepad_available: return None
+        with cls._lock:
+            if cls._instance is None:
+                try:
+                    cls._instance = cls()
+                except Exception as e:
+                    print(f"[GAMEPAD] Failed to create virtual gamepad: {e}")
+                    return None
+            return cls._instance
+
+    @classmethod
+    def available(cls): return _vgamepad_available
+
+    @classmethod
+    def connected(cls):
+        with cls._lock: return cls._instance is not None
+
+    @classmethod
+    def destroy(cls):
+        with cls._lock:
+            if cls._instance is not None:
+                try: cls._instance._close()
+                except: pass
+                cls._instance = None
+
+    def __init__(self):
+        self._pad = vg.VX360Gamepad()
+        self._pressed = set()
+        self._axis_values = {a[0]: 0.0 for a in GAMEPAD_AXES}
+        print("[GAMEPAD] Virtual Xbox 360 controller created")
+
+    def _close(self):
+        try: self._pad.reset(); self._pad.update()
+        except: pass
+        print("[GAMEPAD] Virtual controller released")
+
+    def press_button(self, btn_name):
+        if btn_name in self._pressed: return
+        try:
+            btn = getattr(vg.XUSB_BUTTON, btn_name, None)
+            if btn is not None:
+                self._pad.press_button(button=btn); self._pad.update()
+                self._pressed.add(btn_name)
+        except Exception as e: print(f"[GAMEPAD] press_button error: {e}")
+
+    def release_button(self, btn_name):
+        try:
+            btn = getattr(vg.XUSB_BUTTON, btn_name, None)
+            if btn is not None:
+                self._pad.release_button(button=btn); self._pad.update()
+                self._pressed.discard(btn_name)
+        except Exception as e: print(f"[GAMEPAD] release_button error: {e}")
+
+    def click_button(self, btn_name):
+        self.press_button(btn_name)
+        time.sleep(0.05)
+        self.release_button(btn_name)
+
+    def set_axis(self, axis_id, value_normalized):
+        """Set axis. value_normalized: 0.0-1.0 gesture intensity.
+        Sticks: maps to -32768..32767. Triggers: maps to 0..255."""
+        self._axis_values[axis_id] = value_normalized
+        try:
+            v = max(0.0, min(1.0, value_normalized))
+            if axis_id == 'left_trigger':
+                self._pad.left_trigger(value=int(v * 255)); self._pad.update()
+            elif axis_id == 'right_trigger':
+                self._pad.right_trigger(value=int(v * 255)); self._pad.update()
+            elif axis_id == 'left_stick_x':
+                self._pad.left_joystick(x_value=int(v * 65535 - 32768), y_value=self._get_stick_raw('left_stick_y'))
+                self._pad.update()
+            elif axis_id == 'left_stick_y':
+                self._pad.left_joystick(x_value=self._get_stick_raw('left_stick_x'), y_value=int(v * 65535 - 32768))
+                self._pad.update()
+            elif axis_id == 'right_stick_x':
+                self._pad.right_joystick(x_value=int(v * 65535 - 32768), y_value=self._get_stick_raw('right_stick_y'))
+                self._pad.update()
+            elif axis_id == 'right_stick_y':
+                self._pad.right_joystick(x_value=self._get_stick_raw('right_stick_x'), y_value=int(v * 65535 - 32768))
+                self._pad.update()
+        except Exception as e: print(f"[GAMEPAD] set_axis error: {e}")
+
+    def _get_stick_raw(self, axis_id):
+        v = self._axis_values.get(axis_id, 0.0)
+        if 'trigger' in axis_id: return int(max(0.0, min(1.0, v)) * 255)
+        return int(max(0.0, min(1.0, v)) * 65535 - 32768)
+
+    def reset_all(self):
+        try: self._pad.reset(); self._pad.update(); self._pressed.clear()
+        except: pass
+        for k in self._axis_values: self._axis_values[k] = 0.0
+
+
+def execute_gamepad_button_press(btn_name):
+    gp = VirtualGamepad.get()
+    if gp: gp.click_button(btn_name)
+
+def execute_gamepad_button_down(btn_name):
+    gp = VirtualGamepad.get()
+    if gp: gp.press_button(btn_name)
+
+def execute_gamepad_button_up(btn_name):
+    gp = VirtualGamepad.get()
+    if gp: gp.release_button(btn_name)
+
+def execute_gamepad_axis(axis_id, value_normalized):
+    gp = VirtualGamepad.get()
+    if gp: gp.set_axis(axis_id, value_normalized)
+
 # ÃƒÂ¢Ã¢â‚¬Â¢Ã‚ÂÃƒÂ¢Ã¢â‚¬Â¢Ã‚ÂÃƒÂ¢Ã¢â‚¬Â¢Ã‚Â FACE MESH ÃƒÂ¢Ã¢â‚¬Â¢Ã‚ÂÃƒÂ¢Ã¢â‚¬Â¢Ã‚ÂÃƒÂ¢Ã¢â‚¬Â¢Ã‚Â
 
 LEFT_EYE_EAR = [33,160,158,133,153,144]; RIGHT_EYE_EAR = [362,385,387,263,373,380]
@@ -301,19 +452,73 @@ def _dist(a,b): return math.sqrt((a.x-b.x)**2+(a.y-b.y)**2+(getattr(a,'z',0)-get
 def _ear(lm,idx):
     p=[lm[i] for i in idx]; return(_dist(p[1],p[5])+_dist(p[2],p[4]))/(2*_dist(p[0],p[3])+0.0001)
 
+class OneEuroFilter:
+    """One-Euro filter for smooth, low-latency signal filtering.
+    Adapts: slow movements get heavy smoothing, fast movements pass through."""
+    def __init__(self, freq=30.0, min_cutoff=1.0, beta=0.007, d_cutoff=1.0):
+        self._freq = freq; self._min_cutoff = min_cutoff; self._beta = beta; self._d_cutoff = d_cutoff
+        self._x_prev = None; self._dx_prev = 0.0; self._t_prev = None
+    def _alpha(self, cutoff, dt):
+        tau = 1.0 / (2.0 * math.pi * cutoff)
+        return 1.0 / (1.0 + tau / max(dt, 0.001))
+    def __call__(self, x, t=None):
+        if t is None: t = time.time()
+        if self._x_prev is None:
+            self._x_prev = x; self._t_prev = t; return x
+        dt = max(t - self._t_prev, 0.001); self._t_prev = t
+        a_d = self._alpha(self._d_cutoff, dt)
+        dx = (x - self._x_prev) / dt
+        dx_hat = a_d * dx + (1 - a_d) * self._dx_prev; self._dx_prev = dx_hat
+        cutoff = self._min_cutoff + self._beta * abs(dx_hat)
+        a = self._alpha(cutoff, dt)
+        x_hat = a * x + (1 - a) * self._x_prev; self._x_prev = x_hat
+        return x_hat
+    def reset(self): self._x_prev = None; self._dx_prev = 0.0; self._t_prev = None
+
+class LandmarkSmoother:
+    """Applies One-Euro filtering to all landmark x,y,z coordinates.
+    Produces a smoothed copy of the landmark list each frame."""
+    def __init__(self, num_landmarks=478, freq=30.0, min_cutoff=1.5, beta=0.01):
+        self._n = num_landmarks; self._freq = freq; self._mc = min_cutoff; self._beta = beta
+        self._filters = None  # lazy init
+    def reset(self): self._filters = None
+    def smooth(self, lm):
+        """Takes raw landmarks, returns smoothed landmarks (as list of SimpleNamespace)."""
+        n = min(len(lm), self._n)
+        if self._filters is None:
+            # 3 filters per landmark: x, y, z
+            self._filters = [(OneEuroFilter(self._freq, self._mc, self._beta),
+                              OneEuroFilter(self._freq, self._mc, self._beta),
+                              OneEuroFilter(self._freq, self._mc, self._beta)) for _ in range(self._n)]
+        from types import SimpleNamespace
+        t = time.time()
+        out = []
+        for i in range(n):
+            fx, fy, fz = self._filters[i]
+            sx = fx(lm[i].x, t); sy = fy(lm[i].y, t); sz = fz(getattr(lm[i], 'z', 0), t)
+            out.append(SimpleNamespace(x=sx, y=sy, z=sz))
+        return out
+
 CAL_N = 45
 
 class GestureDetector:
-    def __init__(self): self.reset()
-    def reset(self): self.cal_n=0; self.cal_s={}; self.bl={}
+    def __init__(self):
+        self._lm_smoother = LandmarkSmoother()
+        self.reset()
+    def reset(self):
+        self.cal_n=0; self.cal_s={}; self.bl={}
+        self._lm_smoother.reset()
     @property
     def calibrated(self): return self.cal_n >= CAL_N
     @property
     def cal_pct(self): return int(min(100, self.cal_n/CAL_N*100))
 
-    def compute(self, lm, tilt_comp=35, sens=None):
+    def compute(self, lm, tilt_comp=35, sens=None, lm_smooth=True):
         """sens: dict of gesture_id -> multiplier. >1 = less motion needed, <1 = more motion needed."""
         if sens is None: sens = {}
+        # Apply One-Euro filtering to raw landmarks before any computation
+        if lm_smooth:
+            lm = self._lm_smoother.smooth(lm)
         raw = {}
         fw = _dist(lm[LEFT_CHEEK],lm[RIGHT_CHEEK])
         fh = _dist(lm[NOSE_TIP],lm[CHIN])
@@ -375,6 +580,15 @@ class GestureDetector:
         nose_z = lm[1].z; forehead_z = lm[10].z
         pitch_indicator = forehead_z - nose_z
 
+        # Head yaw (left/right turn): nose tip X position relative to face midpoint
+        face_mid_x = (lm[LEFT_CHEEK].x + lm[RIGHT_CHEEK].x) / 2.0
+        head_yaw = (lm[NOSE_TIP].x - face_mid_x) / (fw + 0.0001)  # positive = nose points right (user turns right)
+
+        # Head pitch (up/down): use pitch_indicator (already computed) - positive = looking down
+        # Also use nose Y relative to face vertical center for a more robust signal
+        face_mid_y = (lm[10].y + lm[CHIN].y) / 2.0
+        head_pitch_y = (lm[NOSE_TIP].y - face_mid_y) / (fh + 0.0001)  # positive = nose lower = looking down
+
         if self.cal_n < CAL_N:
             s=self.cal_s
             for k,v in [('br',br),('lbr',lbr),('rbr',rbr),('sr',sr),('mo',mo),
@@ -383,7 +597,9 @@ class GestureDetector:
                         ('ul_nose',upper_lip_to_nose),('ll_nose',lower_lip_to_nose),
                         ('corner_nose',corner_to_nose),
                         ('brow_gap',brow_inner_gap),
-                        ('brow_eye_gap',brow_eye_gap)]:
+                        ('brow_eye_gap',brow_eye_gap),
+                        ('head_yaw',head_yaw),
+                        ('head_pitch_y',head_pitch_y)]:
                 s[k]=s.get(k,0)+v
             self.cal_n += 1
             if self.cal_n == CAL_N:
@@ -430,6 +646,41 @@ class GestureDetector:
             raw['smirk_left'] = max(0, min(100, asym_dev / (0.025/sens.get('smirk_left',1.0)) * 100))
             raw['smirk_right'] = max(0, min(100, -asym_dev / (0.025/sens.get('smirk_right',1.0)) * 100))
 
+            # ---- CROSS-GESTURE SUPPRESSION ----
+
+            # Smirk suppresses smile: a smirk is intentionally asymmetric, not a smile.
+            # Strong smirk means the "smile" reading is just bleed from one-sided corner rise.
+            smirk_max = max(raw['smirk_left'], raw['smirk_right'])
+            if smirk_max > 30:
+                raw['smile'] = max(0, raw['smile'] - smirk_max * 0.7)
+
+            # Wink suppresses opposite eyebrow: squinting one eye physically shifts brow landmarks
+            # on both sides via skin tension and mesh coupling.
+            if raw['wink_left'] > 30:
+                raw['eyebrow_raise_right'] = max(0, raw['eyebrow_raise_right'] - raw['wink_left'] * 0.6)
+            if raw['wink_right'] > 30:
+                raw['eyebrow_raise_left'] = max(0, raw['eyebrow_raise_left'] - raw['wink_right'] * 0.6)
+            # Also suppress same-side brow (winking can bunch up skin above the eye)
+            if raw['wink_left'] > 40:
+                raw['eyebrow_raise_left'] = max(0, raw['eyebrow_raise_left'] - raw['wink_left'] * 0.4)
+            if raw['wink_right'] > 40:
+                raw['eyebrow_raise_right'] = max(0, raw['eyebrow_raise_right'] - raw['wink_right'] * 0.4)
+
+            # Pucker suppresses eyebrow raise: lip pursing pulls facial skin and shifts
+            # brow landmarks relative to hairline reference, creating phantom raise.
+            if raw['pucker'] > 25:
+                pucker_suppress = raw['pucker'] * 0.5
+                raw['eyebrow_raise'] = max(0, raw['eyebrow_raise'] - pucker_suppress)
+                raw['eyebrow_raise_left'] = max(0, raw['eyebrow_raise_left'] - pucker_suppress)
+                raw['eyebrow_raise_right'] = max(0, raw['eyebrow_raise_right'] - pucker_suppress)
+
+            # Blink suppresses eyebrow raise: closing both eyes creates similar skin bunching
+            if raw['blink'] > 40:
+                blink_suppress = raw['blink'] * 0.5
+                raw['eyebrow_raise'] = max(0, raw['eyebrow_raise'] - blink_suppress)
+                raw['eyebrow_raise_left'] = max(0, raw['eyebrow_raise_left'] - blink_suppress)
+                raw['eyebrow_raise_right'] = max(0, raw['eyebrow_raise_right'] - blink_suppress)
+
             # Brow furrow: pitch-robust via brow-to-eye-corner gap
             # Apply pitch compensation: tilting forward shrinks brow_eye_gap artificially
             s_bf = sens.get('brow_furrow', 1.0)
@@ -443,9 +694,27 @@ class GestureDetector:
             if raw['mouth_open'] > 30:
                 raw_furrow *= max(0, 1.0 - raw['mouth_open'] / 80.0)
             raw['brow_furrow'] = max(0, min(100, raw_furrow))
+
+            # Head yaw (left/right turn)
+            s_yaw = sens.get('head_left', sens.get('head_right', 1.0))
+            yaw_dev = head_yaw - self.bl['head_yaw']
+            # yaw_dev positive = nose moved right = user turned right (in mirrored view: head_right)
+            # Sensitivity divisor: ~0.04 normalized units = full turn at 1x sensitivity
+            raw['head_right'] = max(0, min(100, yaw_dev / (0.04/s_yaw) * 100))
+            raw['head_left'] = max(0, min(100, -yaw_dev / (0.04/s_yaw) * 100))
+
+            # Head pitch (up/down tilt) - combine Z-based pitch and Y-based pitch for robustness
+            s_pitch = sens.get('head_up', sens.get('head_down', 1.0))
+            pitch_y_dev = head_pitch_y - self.bl['head_pitch_y']
+            # pitch_y_dev positive = nose moved down = looking down
+            # pitch_dev (Z-based) positive = forehead closer = looking down
+            combined_pitch = pitch_y_dev * 0.6 + pitch_dev * 0.4
+            raw['head_down'] = max(0, min(100, combined_pitch / (0.03/s_pitch) * 100))
+            raw['head_up'] = max(0, min(100, -combined_pitch / (0.03/s_pitch) * 100))
         else:
             for k in ('eyebrow_raise','eyebrow_raise_left','eyebrow_raise_right','mouth_open',
-                      'smile','pucker','smirk_left','smirk_right','brow_furrow'):
+                      'smile','pucker','smirk_left','smirk_right','brow_furrow',
+                      'head_up','head_down','head_left','head_right'):
                 raw[k] = 0
         return raw
 
@@ -472,13 +741,65 @@ class CameraThread(QThread):
     status_changed = pyqtSignal(str)
     error = pyqtSignal(str)
 
-    def __init__(self, cam_index=0, cam_backend=None):
+    # Resolution presets: (label, width, height)
+    RESOLUTIONS = [
+        ('480p (640x480)', 640, 480),
+        ('720p (1280x720)', 1280, 720),
+        ('1080p (1920x1080)', 1920, 1080),
+    ]
+
+    def __init__(self, cam_index=0, cam_backend=None, res_index=1):
         super().__init__(); self._running=False; self._mx=QMutex()
         self._cam_index = cam_index
         self._cam_backend = cam_backend
+        self._res_index = res_index
+        # Shared camera settings dict (read by run loop, written by UI thread)
+        self._settings = {
+            'denoise': 0,           # bilateral filter strength 0=off, 1-10
+            'auto_exposure': True,
+            'exposure': -6,         # log2 value, typical range -13 to 0
+            'auto_wb': True,
+            'wb_temp': 4500,        # Kelvin, typical 2800-6500
+            'gain': 0,              # 0-255 typical
+            'brightness': 128,      # 0-255
+            'contrast': 128,        # 0-255
+            'sharpness': 128,       # 0-255
+        }
+        self._settings_dirty = False
+        self._cap = None
+
+    def update_settings(self, settings):
+        """Called from UI thread to update camera settings."""
+        with QMutexLocker(self._mx):
+            self._settings.update(settings)
+            self._settings_dirty = True
 
     def stop(self):
         with QMutexLocker(self._mx): self._running=False
+
+    def _apply_hw_settings(self, cap):
+        """Apply hardware camera settings via OpenCV CAP_PROP."""
+        s = self._settings
+        try:
+            # Auto exposure: 0.25=manual, 0.75=auto on most drivers
+            if s['auto_exposure']:
+                cap.set(cv2.CAP_PROP_AUTO_EXPOSURE, 0.75)
+            else:
+                cap.set(cv2.CAP_PROP_AUTO_EXPOSURE, 0.25)
+                cap.set(cv2.CAP_PROP_EXPOSURE, s['exposure'])
+            # White balance
+            if s['auto_wb']:
+                cap.set(cv2.CAP_PROP_AUTO_WB, 1)
+            else:
+                cap.set(cv2.CAP_PROP_AUTO_WB, 0)
+                cap.set(cv2.CAP_PROP_WB_TEMPERATURE, s['wb_temp'])
+            # Direct controls
+            cap.set(cv2.CAP_PROP_GAIN, s['gain'])
+            cap.set(cv2.CAP_PROP_BRIGHTNESS, s['brightness'])
+            cap.set(cv2.CAP_PROP_CONTRAST, s['contrast'])
+            cap.set(cv2.CAP_PROP_SHARPNESS, s['sharpness'])
+        except Exception as e:
+            print(f"[CAM] Settings apply error (some may not be supported): {e}")
 
     def run(self):
         self._running = True
@@ -489,8 +810,17 @@ class CameraThread(QThread):
             cap = cv2.VideoCapture(self._cam_index)
         if not cap.isOpened():
             self.error.emit("Could not open camera"); return
-        cap.set(cv2.CAP_PROP_FRAME_WIDTH,640); cap.set(cv2.CAP_PROP_FRAME_HEIGHT,480)
-        cap.set(cv2.CAP_PROP_FPS,60)
+        # Set resolution
+        _, rw, rh = self.RESOLUTIONS[min(self._res_index, len(self.RESOLUTIONS)-1)]
+        cap.set(cv2.CAP_PROP_FRAME_WIDTH, rw); cap.set(cv2.CAP_PROP_FRAME_HEIGHT, rh)
+        cap.set(cv2.CAP_PROP_FPS, 60)
+        # Read back actual resolution
+        actual_w = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH))
+        actual_h = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
+        print(f"[CAM] Requested {rw}x{rh}, got {actual_w}x{actual_h}")
+        # Apply initial hardware settings
+        self._apply_hw_settings(cap)
+        self._cap = cap
         fm = None; mode = None
         try:
             from mediapipe.tasks import python as mpt
@@ -507,7 +837,7 @@ class CameraThread(QThread):
                 min_tracking_confidence=0.5, output_face_blendshapes=False,
                 output_facial_transformation_matrixes=False)
             fm = vision.FaceLandmarker.create_from_options(opts)
-            mode = 'tasks'; self.status_changed.emit("Camera ready")
+            mode = 'tasks'; self.status_changed.emit(f"Camera ready ({actual_w}x{actual_h})")
         except Exception as e:
             self.error.emit(f"MediaPipe init failed: {e}"); cap.release(); return
 
@@ -515,9 +845,19 @@ class CameraThread(QThread):
         while True:
             with QMutexLocker(self._mx):
                 if not self._running: break
+                if self._settings_dirty:
+                    self._apply_hw_settings(cap)
+                    self._settings_dirty = False
+                denoise_str = self._settings['denoise']
             ret, frame = cap.read()
             if not ret: continue
             frame = cv2.flip(frame, 1)
+            # Pre-processing: bilateral filter for noise reduction
+            if denoise_str > 0:
+                d = max(3, denoise_str)     # kernel size (odd, 3-10)
+                sc = denoise_str * 10       # sigma color
+                ss = denoise_str * 10       # sigma space
+                frame = cv2.bilateralFilter(frame, d, sc, ss)
             rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
             lm = None
             if mode == 'legacy':
@@ -529,7 +869,7 @@ class CameraThread(QThread):
             fc+=1; now=time.time()
             if now-ft>=0.5: fps=fc/(now-ft); fc=0; ft=now
             self.frame_ready.emit(frame, lm, fps)
-        cap.release(); fm.close()
+        cap.release(); self._cap = None; fm.close()
 
 # ÃƒÂ¢Ã¢â‚¬Â¢Ã‚ÂÃƒÂ¢Ã¢â‚¬Â¢Ã‚ÂÃƒÂ¢Ã¢â‚¬Â¢Ã‚Â GESTURE DEFS ÃƒÂ¢Ã¢â‚¬Â¢Ã‚ÂÃƒÂ¢Ã¢â‚¬Â¢Ã‚ÂÃƒÂ¢Ã¢â‚¬Â¢Ã‚Â
 
@@ -546,18 +886,28 @@ GESTURES = [
     dict(id='pucker', name='Pucker', sub='Lips pursed/narrowed', icon='\U0001F48B', color='#ff66aa', ds=50, dtmin=30, dtmax=85),
     dict(id='smirk_left', name='Left Smirk', sub='Left corner raised', icon='\U0001F60F', color='#44ddaa', ds=50, dtmin=35, dtmax=90),
     dict(id='smirk_right', name='Right Smirk', sub='Right corner raised', icon='\U0001F60F', color='#44ddaa', ds=50, dtmin=35, dtmax=90),
+    dict(id='head_up', name='Head Up', sub='Tilt head upward', icon='\u2B06', color='#aa66ff', ds=50, dtmin=15, dtmax=100),
+    dict(id='head_down', name='Head Down', sub='Tilt head downward', icon='\u2B07', color='#aa66ff', ds=50, dtmin=15, dtmax=100),
+    dict(id='head_left', name='Head Left', sub='Turn head left', icon='\u2B05', color='#66aaff', ds=50, dtmin=15, dtmax=100),
+    dict(id='head_right', name='Head Right', sub='Turn head right', icon='\u27A1', color='#66aaff', ds=50, dtmin=15, dtmax=100),
 ]
 
-ACTION_TYPES = [('none','No Action'),('key','Key Press'),('macro','Macro Sequence'),('the_rock','\U0001FAA8 The Rock'),('left_click','Left Click'),
+ACTION_TYPES = [('none','No Action'),('key','Key Press'),('macro','Macro Sequence'),('left_click','Left Click'),
     ('right_click','Right Click'),('double_click','Double Click'),('middle_click','Middle Click'),
-    ('scroll_up','Scroll Up'),('scroll_down','Scroll Down'),('drag_toggle','Drag Toggle'),('command','Run Command')]
+    ('scroll_up','Scroll Up'),('scroll_down','Scroll Down'),('drag_toggle','Drag Toggle'),('command','Run Command'),
+    ('gamepad_button','\U0001F3AE Gamepad Button'),('gamepad_axis','\U0001F579 Gamepad Axis')]
 
-TRIGGER_MODES = [('single','Single Press'),('hold','Hold (Sustain)'),('toggle','Toggle On/Off')]
+# Right eyebrow gets the bonus "The Rock" action
+ACTION_TYPES_RIGHT_EYEBROW = ACTION_TYPES[:3] + [('the_rock','\U0001FAA8 The Rock')] + ACTION_TYPES[3:]
 
-# Actions that support sustained hold (key down / mouse down)
-_HOLDABLE_ACTIONS = {'key','left_click','right_click','middle_click'}
+TRIGGER_MODES = [('single','Single Press'),('hold','Hold (Sustain)'),('toggle','Toggle On/Off'),('analog','Analog (Continuous)')]
+
+# Actions that support sustained hold (key down / mouse down / gamepad button down)
+_HOLDABLE_ACTIONS = {'key','left_click','right_click','middle_click','gamepad_button'}
 # Actions that repeat during hold mode (non-holdable continuous actions)
 _REPEATABLE_ACTIONS = {'scroll_up','scroll_down','double_click','macro'}
+# Actions that map continuously (per-frame analog output)
+_ANALOG_ACTIONS = {'gamepad_axis'}
 
 # ÃƒÂ¢Ã¢â‚¬Â¢Ã‚ÂÃƒÂ¢Ã¢â‚¬Â¢Ã‚ÂÃƒÂ¢Ã¢â‚¬Â¢Ã‚Â STYLESHEET ÃƒÂ¢Ã¢â‚¬Â¢Ã‚ÂÃƒÂ¢Ã¢â‚¬Â¢Ã‚ÂÃƒÂ¢Ã¢â‚¬Â¢Ã‚Â
 
@@ -567,7 +917,7 @@ QPushButton{background:#16161f;border:1px solid #2a2a3a;border-radius:6px;color:
 QPushButton:hover{border-color:#4a4a6a;background:#1a1a25}
 QComboBox{background:#1e1e2a;border:1px solid #2a2a3a;border-radius:6px;color:#e8e8f0;padding:5px 10px;min-height:24px}
 QComboBox::drop-down{border:none;width:20px}
-QComboBox QAbstractItemView{background:#16161f;border:1px solid #2a2a3a;color:#e8e8f0;selection-background-color:#00d4ff33}
+QComboBox QAbstractItemView{background:#16161f;border:1px solid #2a2a3a;color:#e8e8f0;selection-background-color:#00d4ff33;max-height:600px}
 QLineEdit{background:#1e1e2a;border:1px solid #2a2a3a;border-radius:6px;color:#e8e8f0;padding:5px 10px;font-family:Consolas;font-size:11px}
 QLineEdit:focus{border-color:#ffaa00;background:#ffaa0033;color:#ffaa00}
 QSlider::groove:horizontal{height:4px;background:#1e1e2a;border-radius:2px}
@@ -575,8 +925,9 @@ QSlider::handle:horizontal{width:14px;height:14px;margin:-5px 0;border-radius:7p
 QCheckBox::indicator{width:18px;height:18px;border-radius:4px;border:1px solid #2a2a3a;background:#1e1e2a}
 QCheckBox::indicator:checked{background:#00d4ff;border-color:#00d4ff}
 QScrollArea{border:none}
-QScrollBar:vertical{width:6px;background:transparent}
-QScrollBar::handle:vertical{background:#2a2a3a;border-radius:3px;min-height:20px}
+QScrollBar:vertical{width:12px;background:#12121a;border-radius:6px}
+QScrollBar::handle:vertical{background:#4a4a6a;border-radius:6px;min-height:30px}
+QScrollBar::handle:vertical:hover{background:#6a6a8a}
 QScrollBar::add-line:vertical,QScrollBar::sub-line:vertical{height:0}
 QScrollBar::add-page:vertical,QScrollBar::sub-page:vertical{background:none}
 QProgressBar{height:4px;background:#1e1e2a;border:none;border-radius:2px}
@@ -766,7 +1117,7 @@ class ChainStepRow(QFrame):
         step_icon.setStyleSheet("font-size:8px;color:#ffaa00;border:none;background:transparent;")
         ly.addWidget(step_icon)
 
-        self.gcb = QComboBox(); self.gcb.setFixedHeight(24)
+        self.gcb = QComboBox(); self.gcb.setFixedHeight(24); self.gcb.setMaxVisibleItems(25)
         self.gcb.addItem("Select gesture...", "")
         for gid, label in GESTURE_CHOICES: self.gcb.addItem(label, gid)
         if gesture_id:
@@ -847,7 +1198,7 @@ class GestureChainCard(QFrame):
         sep = QFrame(); sep.setFrameShape(QFrame.Shape.HLine); sep.setStyleSheet("color:#2a2a3a;"); ly.addWidget(sep)
         ly.addWidget(self._lbl("Chain Action"))
         ar = QHBoxLayout()
-        self.ac = QComboBox()
+        self.ac = QComboBox(); self.ac.setMaxVisibleItems(25)
         for v, l in ACTION_TYPES: self.ac.addItem(l, v)
         self.ac.currentIndexChanged.connect(self._oa); ar.addWidget(self.ac)
         self.ke = KeyCaptureEdit(); self.ke.hide(); ar.addWidget(self.ke)
@@ -1048,7 +1399,7 @@ class MorsePatternRow(QFrame):
         outer.addLayout(top)
         bot = QHBoxLayout(); bot.setSpacing(4)
         arr = QLabel("\u2192"); arr.setStyleSheet("color:#555570;font-size:12px;border:none;"); bot.addWidget(arr)
-        self.ac = QComboBox(); self.ac.setFixedHeight(22); self.ac.setStyleSheet("font-size:10px;")
+        self.ac = QComboBox(); self.ac.setFixedHeight(22); self.ac.setMaxVisibleItems(25)
         for v, l in ACTION_TYPES: self.ac.addItem(l, v)
         self.ac.currentIndexChanged.connect(self._oa); bot.addWidget(self.ac, stretch=1)
         self.ke = KeyCaptureEdit(); self.ke.setFixedWidth(80); self.ke.setFixedHeight(22); self.ke.hide(); bot.addWidget(self.ke)
@@ -1127,7 +1478,7 @@ class MorseChainCard(QFrame):
         del_btn.clicked.connect(lambda: self.chain_deleted.emit(self)); top.addWidget(del_btn)
         ly.addLayout(top)
         ly.addWidget(self._lbl("Trigger Gesture"))
-        self.gcb = QComboBox(); self.gcb.setFixedHeight(26)
+        self.gcb = QComboBox(); self.gcb.setFixedHeight(26); self.gcb.setMaxVisibleItems(25)
         self.gcb.addItem("Select gesture...", "")
         for gid, label in GESTURE_CHOICES: self.gcb.addItem(label, gid)
         self.gcb.currentIndexChanged.connect(self._on_gesture_changed); ly.addWidget(self.gcb)
@@ -1221,8 +1572,9 @@ def _sens_mult(v):
         return 1.0 + 2.0 * ((v - 50) / 50.0)   # linear 1.0 to 3.0
 
 class GestureCard(QFrame):
-    def __init__(self, g):
+    def __init__(self, g, action_types=None):
         super().__init__(); self.g=g; self.gid=g['id']; self.color=g['color']
+        if action_types is None: action_types = ACTION_TYPES
         self.setStyleSheet(f"background:#16161f;border:1px solid #2a2a3a;border-radius:10px;")
         ly = QVBoxLayout(self); ly.setContentsMargins(12,12,12,12); ly.setSpacing(6)
 
@@ -1261,8 +1613,8 @@ class GestureCard(QFrame):
         sep=QFrame(); sep.setFrameShape(QFrame.Shape.HLine); sep.setStyleSheet("color:#2a2a3a;"); ly.addWidget(sep)
         ly.addWidget(self._lbl("Trigger Action"))
         ar=QHBoxLayout()
-        self.ac=QComboBox()
-        for v,l in ACTION_TYPES: self.ac.addItem(l,v)
+        self.ac=QComboBox(); self.ac.setMaxVisibleItems(25)
+        for v,l in action_types: self.ac.addItem(l,v)
         self.ac.currentIndexChanged.connect(self._oa); ar.addWidget(self.ac)
         self.ke=KeyCaptureEdit(); self.ke.hide(); ar.addWidget(self.ke)
         self.ce=QLineEdit(); self.ce.setPlaceholderText("Command..."); self.ce.hide(); ar.addWidget(self.ce)
@@ -1271,12 +1623,38 @@ class GestureCard(QFrame):
         # Macro editor (visible when action type is 'macro')
         self.me=MacroEditor(); self.me.hide(); ly.addWidget(self.me)
 
+        # Gamepad button picker (visible when action type is 'gamepad_button')
+        self.gp_btn_cb = QComboBox(); self.gp_btn_cb.setMaxVisibleItems(25)
+        for btn_id, btn_label in GAMEPAD_BUTTONS: self.gp_btn_cb.addItem(btn_label, btn_id)
+        self.gp_btn_cb.hide(); ly.addWidget(self.gp_btn_cb)
+
+        # Gamepad axis picker + options (visible when action type is 'gamepad_axis')
+        self.gp_axis_frame = QFrame()
+        self.gp_axis_frame.setObjectName("gpAxisFrame")
+        self.gp_axis_frame.setStyleSheet("#gpAxisFrame{background:transparent;border:none;}")
+        gp_ax_ly = QVBoxLayout(self.gp_axis_frame); gp_ax_ly.setContentsMargins(0,0,0,0); gp_ax_ly.setSpacing(4)
+        ax_row = QHBoxLayout()
+        self.gp_axis_cb = QComboBox(); self.gp_axis_cb.setMaxVisibleItems(25)
+        for ax_id, ax_label, *_ in GAMEPAD_AXES: self.gp_axis_cb.addItem(ax_label, ax_id)
+        ax_row.addWidget(self.gp_axis_cb)
+        self.gp_invert = QCheckBox("Invert"); self.gp_invert.setStyleSheet("font-size:10px;border:none;")
+        ax_row.addWidget(self.gp_invert); gp_ax_ly.addLayout(ax_row)
+        dz_row = QHBoxLayout()
+        dz_lbl = QLabel("Dead Zone"); dz_lbl.setStyleSheet("font-size:10px;color:#555570;border:none;"); dz_row.addWidget(dz_lbl)
+        self.gp_deadzone = QSlider(Qt.Orientation.Horizontal); self.gp_deadzone.setRange(0,50); self.gp_deadzone.setValue(5)
+        self.gp_deadzone.setStyleSheet("QSlider::handle:horizontal{background:#00ff88;border:2px solid #16161f;}")
+        dz_row.addWidget(self.gp_deadzone)
+        self.gp_dz_val = QLabel("5%"); self.gp_dz_val.setStyleSheet("font-family:Consolas;font-size:10px;color:#00ff88;min-width:28px;border:none;")
+        self.gp_deadzone.valueChanged.connect(lambda v: self.gp_dz_val.setText(f"{v}%")); dz_row.addWidget(self.gp_dz_val)
+        gp_ax_ly.addLayout(dz_row)
+        self.gp_axis_frame.hide(); ly.addWidget(self.gp_axis_frame)
+
         # Trigger mode
         ly.addWidget(self._lbl("Trigger Mode"))
         mr=QHBoxLayout()
-        self.tm=QComboBox()
+        self.tm=QComboBox(); self.tm.setMaxVisibleItems(25)
         for v,l in TRIGGER_MODES: self.tm.addItem(l,v)
-        self.tm.setToolTip("Single Press: fire once per activation\nHold (Sustain): held while gesture active\nToggle: first activation starts, second stops")
+        self.tm.setToolTip("Single Press: fire once per activation\nHold (Sustain): held while gesture active\nToggle: first activation starts, second stops\nAnalog: continuous axis output proportional to gesture intensity")
         mr.addWidget(self.tm)
         self.tml=QLabel(""); self.tml.setStyleSheet("font-size:10px;color:#555570;border:none;"); mr.addWidget(self.tml)
         self.tm.currentIndexChanged.connect(self._otm); ly.addLayout(mr)
@@ -1289,16 +1667,27 @@ class GestureCard(QFrame):
         self.ke.setVisible(a=='key')
         self.ce.setVisible(a=='command')
         self.me.setVisible(a=='macro')
+        self.gp_btn_cb.setVisible(a=='gamepad_button')
+        self.gp_axis_frame.setVisible(a=='gamepad_axis')
+        # Auto-select analog trigger mode when gamepad_axis is chosen
+        if a=='gamepad_axis':
+            for i in range(self.tm.count()):
+                if self.tm.itemData(i)=='analog': self.tm.setCurrentIndex(i); break
     def _otm(self):
         m=self.tm.currentData()
-        hints = {'single':'','hold':'Action sustained while gesture held','toggle':'Tap gesture to start/stop'}
+        hints = {'single':'','hold':'Action sustained while gesture held','toggle':'Tap gesture to start/stop',
+                 'analog':'Continuous output proportional to gesture'}
         self.tml.setText(hints.get(m,''))
     def set_live(self,v): self.lb.setValue(int(v))
     def get_state(self):
         return dict(enabled=self.en.isChecked(), sensitivity=self.ss.value(),
             thresholdMin=self.tmin.value(), thresholdMax=self.tmax.value(),
             action=self.ac.currentData(), keyBind=self.ke.text(), command=self.ce.text(),
-            macro=self.me.to_macro_string(), triggerMode=self.tm.currentData())
+            macro=self.me.to_macro_string(), triggerMode=self.tm.currentData(),
+            gamepadBtn=self.gp_btn_cb.currentData() or '',
+            gamepadAxis=self.gp_axis_cb.currentData() or '',
+            gamepadInvert=self.gp_invert.isChecked(),
+            gamepadDeadzone=self.gp_deadzone.value())
     def set_state(self,s):
         self.en.setChecked(s.get('enabled',True)); self.ss.setValue(s.get('sensitivity',50))
         self.tmin.setValue(s.get('thresholdMin',20)); self.tmax.setValue(s.get('thresholdMax',80))
@@ -1310,11 +1699,22 @@ class GestureCard(QFrame):
         tm=s.get('triggerMode','single')
         for i in range(self.tm.count()):
             if self.tm.itemData(i)==tm: self.tm.setCurrentIndex(i); break
+        # Gamepad state
+        gb = s.get('gamepadBtn','')
+        for i in range(self.gp_btn_cb.count()):
+            if self.gp_btn_cb.itemData(i)==gb: self.gp_btn_cb.setCurrentIndex(i); break
+        ga = s.get('gamepadAxis','')
+        for i in range(self.gp_axis_cb.count()):
+            if self.gp_axis_cb.itemData(i)==ga: self.gp_axis_cb.setCurrentIndex(i); break
+        self.gp_invert.setChecked(s.get('gamepadInvert',False))
+        self.gp_deadzone.setValue(s.get('gamepadDeadzone',5))
     def reset_def(self):
         g=self.g; self.en.setChecked(True); self.ss.setValue(g['ds'])
         self.tmin.setValue(g['dtmin']); self.tmax.setValue(g['dtmax'])
         self.ac.setCurrentIndex(0); self.ke.clear(); self.ce.clear(); self.me.clear()
         self.tm.setCurrentIndex(0)
+        self.gp_btn_cb.setCurrentIndex(0); self.gp_axis_cb.setCurrentIndex(0)
+        self.gp_invert.setChecked(False); self.gp_deadzone.setValue(5)
 
 # ÃƒÂ¢Ã¢â‚¬Â¢Ã‚ÂÃƒÂ¢Ã¢â‚¬Â¢Ã‚ÂÃƒÂ¢Ã¢â‚¬Â¢Ã‚Â MAIN WINDOW ÃƒÂ¢Ã¢â‚¬Â¢Ã‚ÂÃƒÂ¢Ã¢â‚¬Â¢Ã‚ÂÃƒÂ¢Ã¢â‚¬Â¢Ã‚Â
 
@@ -1337,7 +1737,9 @@ class MainWindow(QMainWindow):
         self.morse_chains = []    # list of MorseChainCard widgets
         self.chain_counter = 0    # for unique chain IDs
         self.chain_state = {}     # chain_id -> {step:int, last_time:float, prev_active:set}
+        self._auto_profile = os.path.join(os.path.dirname(os.path.abspath(__file__)), '.facecommand_last_profile.json')
         self._build()
+        self._auto_load()
 
     def _build(self):
         c=QWidget(); self.setCentralWidget(c); root=QVBoxLayout(c); root.setContentsMargins(0,0,0,0); root.setSpacing(0)
@@ -1352,6 +1754,8 @@ class MainWindow(QMainWindow):
         hl.addWidget(t)
         v=QLabel("v1.4 native"); v.setStyleSheet("color:#555570;font-size:11px;"); hl.addWidget(v); hl.addStretch()
         self.stl=QLabel(); self._ss("Camera Off","#ff4466"); hl.addWidget(self.stl)
+        # Gamepad status
+        self.gp_stl=QLabel(); self._update_gp_status(); hl.addWidget(self.gp_stl)
         # Camera selector
         self.cam_cb=QComboBox(); self.cam_cb.setMinimumWidth(200); self.cam_cb.setFixedHeight(28)
         self.cam_cb.setStyleSheet("QComboBox{background:#1e1e2a;border:1px solid #2a2a3a;border-radius:6px;color:#e8e8f0;padding:3px 8px;font-size:11px;}")
@@ -1412,6 +1816,108 @@ class MainWindow(QMainWindow):
         self.zprb.clicked.connect(_reset_view); zpr.addWidget(self.zprb); zpl.addLayout(zpr)
         ll.addWidget(zpf)
 
+        # Camera Settings panel (collapsible)
+        csf=QFrame(); csf.setStyleSheet("background:#12121a;border-bottom:1px solid #2a2a3a;")
+        csl=QVBoxLayout(csf); csl.setContentsMargins(12,4,12,4); csl.setSpacing(3)
+
+        # Collapsible header
+        cs_hdr=QHBoxLayout(); cs_hdr.setSpacing(6)
+        self._cs_toggle=QPushButton("\u25B6 Camera Settings"); self._cs_toggle.setFixedHeight(22)
+        self._cs_toggle.setStyleSheet("font-size:11px;font-weight:600;padding:2px 6px;border:none;color:#8888a0;background:transparent;text-align:left;")
+        self._cs_toggle.clicked.connect(self._toggle_cam_settings); cs_hdr.addWidget(self._cs_toggle); cs_hdr.addStretch()
+        csl.addLayout(cs_hdr)
+
+        self._cs_body=QFrame(); self._cs_body.setStyleSheet("background:transparent;border:none;")
+        self._cs_body.hide()
+        cs_body_ly=QVBoxLayout(self._cs_body); cs_body_ly.setContentsMargins(0,2,0,2); cs_body_ly.setSpacing(3)
+
+        # Resolution
+        res_row=QHBoxLayout(); res_row.setSpacing(6)
+        rlbl=QLabel("\U0001F4FA Res"); rlbl.setStyleSheet("font-size:10px;color:#8888a0;border:none;min-width:32px;"); res_row.addWidget(rlbl)
+        self.res_cb=QComboBox(); self.res_cb.setFixedHeight(22); self.res_cb.setMaxVisibleItems(10)
+        for label, rw, rh in CameraThread.RESOLUTIONS: self.res_cb.addItem(label)
+        self.res_cb.setCurrentIndex(1)  # default 720p
+        self.res_cb.setToolTip("Requires camera restart to take effect")
+        res_row.addWidget(self.res_cb, stretch=1)
+        cs_body_ly.addLayout(res_row)
+
+        # Denoise
+        dn_row=QHBoxLayout(); dn_row.setSpacing(6)
+        dnlbl=QLabel("\u2728 Denoise"); dnlbl.setStyleSheet("font-size:10px;color:#8888a0;border:none;min-width:52px;"); dn_row.addWidget(dnlbl)
+        self.denoise_sl=QSlider(Qt.Orientation.Horizontal); self.denoise_sl.setRange(0,10); self.denoise_sl.setValue(0)
+        self.denoise_sl.setStyleSheet("QSlider::handle:horizontal{background:#00ff88;border:2px solid #16161f;}")
+        self.denoise_sl.valueChanged.connect(self._push_cam_settings); dn_row.addWidget(self.denoise_sl, stretch=1)
+        self.dn_vl=QLabel("Off"); self.dn_vl.setStyleSheet("font-family:Consolas;font-size:10px;color:#00ff88;min-width:24px;border:none;")
+        self.dn_vl.setAlignment(Qt.AlignmentFlag.AlignRight|Qt.AlignmentFlag.AlignVCenter)
+        self.denoise_sl.valueChanged.connect(lambda v: self.dn_vl.setText("Off" if v==0 else str(v))); dn_row.addWidget(self.dn_vl)
+        cs_body_ly.addLayout(dn_row)
+
+        sep_cs=QFrame(); sep_cs.setFrameShape(QFrame.Shape.HLine); sep_cs.setStyleSheet("color:#2a2a3a;"); cs_body_ly.addWidget(sep_cs)
+
+        # Auto Exposure checkbox + Exposure slider
+        ae_row=QHBoxLayout(); ae_row.setSpacing(6)
+        self.auto_exp_cb=QCheckBox("Auto Exposure"); self.auto_exp_cb.setChecked(True)
+        self.auto_exp_cb.setStyleSheet("font-size:10px;color:#8888a0;border:none;")
+        self.auto_exp_cb.toggled.connect(self._push_cam_settings); self.auto_exp_cb.toggled.connect(lambda v: self.exposure_sl.setEnabled(not v))
+        ae_row.addWidget(self.auto_exp_cb); ae_row.addStretch(); cs_body_ly.addLayout(ae_row)
+
+        exp_row=QHBoxLayout(); exp_row.setSpacing(6)
+        explbl=QLabel("Exposure"); explbl.setStyleSheet("font-size:10px;color:#8888a0;border:none;min-width:52px;"); exp_row.addWidget(explbl)
+        self.exposure_sl=QSlider(Qt.Orientation.Horizontal); self.exposure_sl.setRange(-13,0); self.exposure_sl.setValue(-6)
+        self.exposure_sl.setEnabled(False)
+        self.exposure_sl.valueChanged.connect(self._push_cam_settings); exp_row.addWidget(self.exposure_sl, stretch=1)
+        self.exp_vl=QLabel("-6"); self.exp_vl.setStyleSheet("font-family:Consolas;font-size:10px;color:#e8e8f0;min-width:24px;border:none;")
+        self.exp_vl.setAlignment(Qt.AlignmentFlag.AlignRight|Qt.AlignmentFlag.AlignVCenter)
+        self.exposure_sl.valueChanged.connect(lambda v: self.exp_vl.setText(str(v))); exp_row.addWidget(self.exp_vl)
+        cs_body_ly.addLayout(exp_row)
+
+        # Auto WB checkbox + WB Temp slider
+        awb_row=QHBoxLayout(); awb_row.setSpacing(6)
+        self.auto_wb_cb=QCheckBox("Auto White Balance"); self.auto_wb_cb.setChecked(True)
+        self.auto_wb_cb.setStyleSheet("font-size:10px;color:#8888a0;border:none;")
+        self.auto_wb_cb.toggled.connect(self._push_cam_settings); self.auto_wb_cb.toggled.connect(lambda v: self.wb_sl.setEnabled(not v))
+        awb_row.addWidget(self.auto_wb_cb); awb_row.addStretch(); cs_body_ly.addLayout(awb_row)
+
+        wb_row=QHBoxLayout(); wb_row.setSpacing(6)
+        wblbl=QLabel("WB Temp"); wblbl.setStyleSheet("font-size:10px;color:#8888a0;border:none;min-width:52px;"); wb_row.addWidget(wblbl)
+        self.wb_sl=QSlider(Qt.Orientation.Horizontal); self.wb_sl.setRange(2800,6500); self.wb_sl.setSingleStep(100); self.wb_sl.setValue(4500)
+        self.wb_sl.setEnabled(False)
+        self.wb_sl.valueChanged.connect(self._push_cam_settings); wb_row.addWidget(self.wb_sl, stretch=1)
+        self.wb_vl=QLabel("4500K"); self.wb_vl.setStyleSheet("font-family:Consolas;font-size:10px;color:#e8e8f0;min-width:36px;border:none;")
+        self.wb_vl.setAlignment(Qt.AlignmentFlag.AlignRight|Qt.AlignmentFlag.AlignVCenter)
+        self.wb_sl.valueChanged.connect(lambda v: self.wb_vl.setText(f"{v}K")); wb_row.addWidget(self.wb_vl)
+        cs_body_ly.addLayout(wb_row)
+
+        sep_cs2=QFrame(); sep_cs2.setFrameShape(QFrame.Shape.HLine); sep_cs2.setStyleSheet("color:#2a2a3a;"); cs_body_ly.addWidget(sep_cs2)
+
+        # Gain, Brightness, Contrast, Sharpness
+        self._cam_sliders = {}
+        for prop_name, label, mn, mx, default in [
+            ('gain', 'Gain', 0, 255, 0),
+            ('brightness', 'Brightness', 0, 255, 128),
+            ('contrast', 'Contrast', 0, 255, 128),
+            ('sharpness', 'Sharpness', 0, 255, 128),
+        ]:
+            sr=QHBoxLayout(); sr.setSpacing(6)
+            sl_lbl=QLabel(label); sl_lbl.setStyleSheet("font-size:10px;color:#8888a0;border:none;min-width:52px;"); sr.addWidget(sl_lbl)
+            sl=QSlider(Qt.Orientation.Horizontal); sl.setRange(mn,mx); sl.setValue(default)
+            sl.valueChanged.connect(self._push_cam_settings); sr.addWidget(sl, stretch=1)
+            sv=QLabel(str(default)); sv.setStyleSheet("font-family:Consolas;font-size:10px;color:#e8e8f0;min-width:24px;border:none;")
+            sv.setAlignment(Qt.AlignmentFlag.AlignRight|Qt.AlignmentFlag.AlignVCenter)
+            sl.valueChanged.connect(lambda v, lb=sv: lb.setText(str(v))); sr.addWidget(sv)
+            cs_body_ly.addLayout(sr)
+            self._cam_sliders[prop_name] = (sl, sv)
+
+        # Reset camera settings button
+        cs_reset_row=QHBoxLayout(); cs_reset_row.addStretch()
+        cs_reset_btn=QPushButton("Reset Camera Settings"); cs_reset_btn.setFixedHeight(22)
+        cs_reset_btn.setStyleSheet("font-size:10px;padding:2px 10px;border:1px solid #2a2a3a;color:#555570;border-radius:4px;")
+        cs_reset_btn.clicked.connect(self._reset_cam_settings)
+        cs_reset_row.addWidget(cs_reset_btn); cs_body_ly.addLayout(cs_reset_row)
+
+        csl.addWidget(self._cs_body)
+        ll.addWidget(csf)
+
         self.fl=QLabel("-- fps"); self.fl.setStyleSheet("font-family:Consolas;font-size:11px;color:#00ff88;padding:4px 12px;"); ll.addWidget(self.fl)
 
         ll.addWidget(self._sec("LIVE READINGS"))
@@ -1462,20 +1968,34 @@ class MainWindow(QMainWindow):
 
         rl.addWidget(self._sec("EXPRESSION GESTURES"))
         grid=QGridLayout(); grid.setSpacing(10)
-        for i,g in enumerate(GESTURES):
-            card=GestureCard(g); self.cards[g['id']]=card; grid.addWidget(card, i//2, i%2)
+        # Explicit grid positions: paired gestures share a row, left=col0, right=col1
+        GRID_LAYOUT = [
+            # (row, col, gesture_id)
+            (0, 0, 'eyebrow_raise'),       (0, 1, 'brow_furrow'),
+            (1, 0, 'eyebrow_raise_left'),   (1, 1, 'eyebrow_raise_right'),
+            (2, 0, 'blink'),
+            (3, 0, 'wink_left'),            (3, 1, 'wink_right'),
+            (4, 0, 'smile'),                (4, 1, 'mouth_open'),
+            (5, 0, 'pucker'),
+            (6, 0, 'smirk_left'),           (6, 1, 'smirk_right'),
+            (7, 0, 'head_up'),              (7, 1, 'head_down'),
+            (8, 0, 'head_left'),            (8, 1, 'head_right'),
+        ]
+        g_lookup = {g['id']: g for g in GESTURES}
+        for row, col, gid in GRID_LAYOUT:
+            g = g_lookup[gid]
+            at = ACTION_TYPES_RIGHT_EYEBROW if gid == 'eyebrow_raise_right' else ACTION_TYPES
+            card = GestureCard(g, action_types=at); self.cards[gid] = card
+            grid.addWidget(card, row, col)
         rl.addLayout(grid)
-        # Default: Right Eyebrow Ã¢â€ â€™ The Rock
-        for i in range(self.cards['eyebrow_raise_right'].ac.count()):
-            if self.cards['eyebrow_raise_right'].ac.itemData(i) == 'the_rock':
-                self.cards['eyebrow_raise_right'].ac.setCurrentIndex(i); break
 
         rl.addWidget(self._sec("GLOBAL SETTINGS"))
         gc=QFrame(); gc.setStyleSheet("background:#16161f;border:1px solid #2a2a3a;border-radius:10px;")
         gcl=QVBoxLayout(gc); gcl.setContentsMargins(14,14,14,14); gcl.setSpacing(6)
-        self.sms = self._gslider(gcl,"Smoothing",1,15,9)
+        self.sms = self._gslider(gcl,"Smoothing",1,30,12)
         self.cds = self._gslider(gcl,"Cooldown (ms)",50,1500,650,50)
         self.hds = self._gslider(gcl,"Hold Time (ms)",5,500,200,25)
+        self.dzs = self._gslider(gcl,"Dead Zone",0,15,3)
         self.pcs = self._gslider(gcl,"Tilt Compensation",0,100,35)
         rl.addWidget(gc); rl.addStretch()
         rsc.setWidget(rwid); sp.addWidget(rsc); sp.setSizes([320,880]); root.addWidget(sp,stretch=1)
@@ -1507,9 +2027,66 @@ class MainWindow(QMainWindow):
     def _ss(self, txt, clr):
         self.stl.setText(f"\u25CF {txt}")
         self.stl.setStyleSheet(f"color:{clr};font-family:Consolas;font-size:11px;background:{clr}33;padding:3px 8px;border-radius:10px;border:1px solid {clr};")
+    def _update_gp_status(self):
+        if not VirtualGamepad.available():
+            self.gp_stl.setText("\U0001F3AE No Driver")
+            self.gp_stl.setStyleSheet("color:#555570;font-family:Consolas;font-size:10px;background:#55557022;padding:3px 6px;border-radius:10px;border:1px solid #555570;")
+            self.gp_stl.setToolTip("Install ViGEmBus + vgamepad for virtual gamepad support:\npip install vgamepad\nhttps://github.com/nefarius/ViGEmBus/releases")
+        elif VirtualGamepad.connected():
+            self.gp_stl.setText("\U0001F3AE Gamepad On")
+            self.gp_stl.setStyleSheet("color:#00ff88;font-family:Consolas;font-size:10px;background:#00ff8822;padding:3px 6px;border-radius:10px;border:1px solid #00ff88;")
+            self.gp_stl.setToolTip("Virtual Xbox 360 controller active")
+        else:
+            self.gp_stl.setText("\U0001F3AE Ready")
+            self.gp_stl.setStyleSheet("color:#ffaa00;font-family:Consolas;font-size:10px;background:#ffaa0022;padding:3px 6px;border-radius:10px;border:1px solid #ffaa00;")
+            self.gp_stl.setToolTip("ViGEmBus installed. Gamepad will activate when a gamepad action is used.")
     def _tc(self):
         if self.cam and self.cam.isRunning(): self._stop()
         else: self._start()
+    def _toggle_cam_settings(self):
+        vis = not self._cs_body.isVisible()
+        self._cs_body.setVisible(vis)
+        self._cs_toggle.setText(("\u25BC" if vis else "\u25B6") + " Camera Settings")
+    def _push_cam_settings(self, _=None):
+        """Push current camera UI settings to the camera thread."""
+        if not self.cam or not self.cam.isRunning(): return
+        s = {
+            'denoise': self.denoise_sl.value(),
+            'auto_exposure': self.auto_exp_cb.isChecked(),
+            'exposure': self.exposure_sl.value(),
+            'auto_wb': self.auto_wb_cb.isChecked(),
+            'wb_temp': self.wb_sl.value(),
+        }
+        for prop_name, (sl, _) in self._cam_sliders.items():
+            s[prop_name] = sl.value()
+        self.cam.update_settings(s)
+    def _reset_cam_settings(self):
+        self.denoise_sl.setValue(0)
+        self.auto_exp_cb.setChecked(True); self.exposure_sl.setValue(-6)
+        self.auto_wb_cb.setChecked(True); self.wb_sl.setValue(4500)
+        defaults = {'gain':0, 'brightness':128, 'contrast':128, 'sharpness':128}
+        for prop_name, (sl, _) in self._cam_sliders.items():
+            sl.setValue(defaults.get(prop_name, 128))
+        self._push_cam_settings()
+    def _get_cam_settings_state(self):
+        """Get camera settings for config save."""
+        s = {'resolution': self.res_cb.currentIndex(), 'denoise': self.denoise_sl.value(),
+             'auto_exposure': self.auto_exp_cb.isChecked(), 'exposure': self.exposure_sl.value(),
+             'auto_wb': self.auto_wb_cb.isChecked(), 'wb_temp': self.wb_sl.value()}
+        for prop_name, (sl, _) in self._cam_sliders.items():
+            s[prop_name] = sl.value()
+        return s
+    def _set_cam_settings_state(self, s):
+        """Restore camera settings from config."""
+        self.res_cb.setCurrentIndex(s.get('resolution', 1))
+        self.denoise_sl.setValue(s.get('denoise', 0))
+        self.auto_exp_cb.setChecked(s.get('auto_exposure', True))
+        self.exposure_sl.setValue(s.get('exposure', -6))
+        self.auto_wb_cb.setChecked(s.get('auto_wb', True))
+        self.wb_sl.setValue(s.get('wb_temp', 4500))
+        defaults = {'gain':0, 'brightness':128, 'contrast':128, 'sharpness':128}
+        for prop_name, (sl, _) in self._cam_sliders.items():
+            sl.setValue(s.get(prop_name, defaults.get(prop_name, 128)))
     def _scan_cameras(self):
         """Scan for available cameras in background thread."""
         cams = enumerate_cameras()
@@ -1543,16 +2120,41 @@ class MainWindow(QMainWindow):
         self.chain_state={}; self._mc_hs={}; self._mc_buf={}; self._mc_last={}; self._mc_active={}
         self._chain_hs={g['id']:0.0 for g in GESTURES}
         self._chain_ta={g['id']:False for g in GESTURES}; self._chain_newly=set()
-        self.cam=CameraThread(cam_index, cam_backend); self.cam.frame_ready.connect(self._of)
+        # Initialize virtual gamepad if any gesture uses a gamepad action
+        self._init_gamepad_if_needed()
+        res_idx = self.res_cb.currentIndex()
+        self.cam=CameraThread(cam_index, cam_backend, res_index=res_idx)
+        # Push current camera settings to thread before starting
+        cam_s = {
+            'denoise': self.denoise_sl.value(),
+            'auto_exposure': self.auto_exp_cb.isChecked(),
+            'exposure': self.exposure_sl.value(),
+            'auto_wb': self.auto_wb_cb.isChecked(),
+            'wb_temp': self.wb_sl.value(),
+        }
+        for prop_name, (sl, _) in self._cam_sliders.items():
+            cam_s[prop_name] = sl.value()
+        self.cam._settings.update(cam_s)
+        self.cam.frame_ready.connect(self._of)
         self.cam.status_changed.connect(lambda t: self._ss(t,"#ffaa00"))
         self.cam.error.connect(lambda e: self._ss(e,"#ff4466")); self.cam.start()
         self.cb.setText("\u25A0 Stop Camera"); self._set_btn_danger(); self.rcb.show()
+    def _init_gamepad_if_needed(self):
+        """Create virtual gamepad if any gesture uses a gamepad action."""
+        needs_gp = False
+        for gid, card in self.cards.items():
+            s = card.get_state()
+            if s['action'] in ('gamepad_button','gamepad_axis'): needs_gp = True; break
+        if needs_gp and VirtualGamepad.available():
+            VirtualGamepad.get()  # creates singleton if not exists
+        self._update_gp_status()
     def _stop(self):
         # Release any held keys/buttons before stopping
         self._release_all_holds()
         if self.cam: self.cam.stop(); self.cam.wait(3000); self.cam=None
         self.cb.setText("\u25B6 Start Camera"); self._set_btn_primary(); self.rcb.hide()
         self._ss("Camera Off","#ff4466"); self.vl.clear(); self.vl.setText("\U0001F4F7  Start Camera"); self.fl.setText("-- fps")
+        self._update_gp_status()
     def _recal(self):
         self._release_all_holds()
         self.chain_state={}
@@ -1563,9 +2165,12 @@ class MainWindow(QMainWindow):
             gid = g['id']
             if self.hold_active.get(gid, False) or self.toggle_state.get(gid, False):
                 s = self.cards[gid].get_state()
-                execute_hold_stop(s['action'], s['keyBind'])
+                execute_hold_stop(s['action'], s['keyBind'], s.get('gamepadBtn',''))
                 self.hold_active[gid] = False
                 self.toggle_state[gid] = False
+        # Reset virtual gamepad if connected
+        gp = VirtualGamepad.get() if VirtualGamepad.connected() else None
+        if gp: gp.reset_all()
 
     @pyqtSlot(object, object, float)
     def _of(self, frame, lm, fps):
@@ -1616,9 +2221,14 @@ class MainWindow(QMainWindow):
         if not self.det.calibrated: self._ss(f"Calibrating... ({self.det.cal_pct}%)","#ffaa00"); return
         self._ss("Tracking","#00ff88")
 
-        alpha = 1-(self.sms.value()/15.0)*0.85
+        alpha = 1-(self.sms.value()/30.0)*0.92
+        dz = self.dzs.value()  # dead zone percentage (0-15)
         for gid,val in raw.items():
-            self.sm[gid]=self.sm.get(gid,0)*(1-alpha)+val*alpha; self.lv[gid]=self.sm[gid]
+            self.sm[gid]=self.sm.get(gid,0)*(1-alpha)+val*alpha
+            # Apply dead zone: values below dz are snapped to 0
+            if self.sm[gid] < dz:
+                self.sm[gid] = 0.0
+            self.lv[gid]=self.sm[gid]
 
         for gid in self.lv:
             iv=int(self.lv[gid])
@@ -1633,12 +2243,31 @@ class MainWindow(QMainWindow):
             if not s['enabled']:
                 # If disabled mid-hold, release
                 if self.hold_active[gid]:
-                    execute_hold_stop(s['action'], s['keyBind']); self.hold_active[gid]=False
+                    execute_hold_stop(s['action'], s['keyBind'], s.get('gamepadBtn','')); self.hold_active[gid]=False
+                # If disabled mid-analog, zero the axis
+                if s.get('triggerMode') == 'analog' and s['action'] == 'gamepad_axis':
+                    execute_gamepad_axis(s.get('gamepadAxis','left_trigger'), 0.0)
                 continue
             val=self.lv.get(gid,0)
-            th = s['thresholdMin']
+            th = s['thresholdMin']; th_max = s.get('thresholdMax', 100)
             mode = s.get('triggerMode', 'single')
             act = s['action']; kb = s['keyBind']; cmd = s['command']; macro = s.get('macro','')
+            gp_btn = s.get('gamepadBtn',''); gp_axis = s.get('gamepadAxis','')
+            gp_invert = s.get('gamepadInvert', False); gp_dz = s.get('gamepadDeadzone', 5)
+
+            # Analog mode: continuous per-frame axis output, no threshold gating
+            if mode == 'analog' and act == 'gamepad_axis' and gp_axis:
+                # Map gesture 0-100 to 0.0-1.0 using threshold range
+                range_size = max(1, th_max - th)
+                clamped = max(0.0, min(1.0, (val - th) / range_size))
+                # Apply dead zone
+                dz = gp_dz / 100.0
+                if clamped < dz: clamped = 0.0
+                else: clamped = (clamped - dz) / (1.0 - dz)
+                # Apply invert
+                if gp_invert: clamped = 1.0 - clamped
+                execute_gamepad_axis(gp_axis, clamped)
+                continue  # skip normal threshold logic for analog
 
             if val >= th:
                 if self.hs[gid] == 0: self.hs[gid] = now_ms
@@ -1648,7 +2277,7 @@ class MainWindow(QMainWindow):
                     # Original behavior: fire once per activation, with cooldown
                     if held >= ht and not self.ta[gid] and now_ms-self.lt[gid]>cd:
                         self.ta[gid]=True; self.lt[gid]=now_ms; self.dc+=1; self.dl.setText(f"Detections: {self.dc}")
-                        threading.Thread(target=execute_action,args=(act,kb,cmd,macro),daemon=True).start()
+                        threading.Thread(target=execute_action,args=(act,kb,cmd,macro,gp_btn),daemon=True).start()
                         self._logit(g['name'],act,kb,macro)
 
                 elif mode == 'hold':
@@ -1658,19 +2287,19 @@ class MainWindow(QMainWindow):
                         self.hold_active[gid] = True; self.ta[gid] = True
                         self.dc+=1; self.dl.setText(f"Detections: {self.dc}")
                         if act in _HOLDABLE_ACTIONS:
-                            threading.Thread(target=execute_hold_start,args=(act,kb),daemon=True).start()
+                            threading.Thread(target=execute_hold_start,args=(act,kb,gp_btn),daemon=True).start()
                         elif act in _REPEATABLE_ACTIONS or act == 'command':
                             # Fire first shot immediately
-                            threading.Thread(target=execute_action,args=(act,kb,cmd,macro),daemon=True).start()
+                            threading.Thread(target=execute_action,args=(act,kb,cmd,macro,gp_btn),daemon=True).start()
                             self.repeat_lt[gid] = now_ms
                         else:
                             # Non-holdable, non-repeatable: just fire once
-                            threading.Thread(target=execute_action,args=(act,kb,cmd,macro),daemon=True).start()
+                            threading.Thread(target=execute_action,args=(act,kb,cmd,macro,gp_btn),daemon=True).start()
                         self._logit(g['name'],act,kb,macro,mode_tag='HOLD')
                     elif self.hold_active[gid] and act in _REPEATABLE_ACTIONS:
                         # Repeat fire while held
                         if now_ms - self.repeat_lt.get(gid,0) >= REPEAT_INTERVAL:
-                            threading.Thread(target=execute_action,args=(act,kb,cmd,macro),daemon=True).start()
+                            threading.Thread(target=execute_action,args=(act,kb,cmd,macro,gp_btn),daemon=True).start()
                             self.repeat_lt[gid] = now_ms
 
                 elif mode == 'toggle':
@@ -1682,22 +2311,22 @@ class MainWindow(QMainWindow):
                             # Toggle ON
                             self.toggle_state[gid] = True
                             if act in _HOLDABLE_ACTIONS:
-                                threading.Thread(target=execute_hold_start,args=(act,kb),daemon=True).start()
+                                threading.Thread(target=execute_hold_start,args=(act,kb,gp_btn),daemon=True).start()
                             else:
-                                threading.Thread(target=execute_action,args=(act,kb,cmd,macro),daemon=True).start()
+                                threading.Thread(target=execute_action,args=(act,kb,cmd,macro,gp_btn),daemon=True).start()
                             self._logit(g['name'],act,kb,macro,mode_tag='TOG ON')
                         else:
                             # Toggle OFF
                             self.toggle_state[gid] = False
                             if act in _HOLDABLE_ACTIONS:
-                                threading.Thread(target=execute_hold_stop,args=(act,kb),daemon=True).start()
+                                threading.Thread(target=execute_hold_stop,args=(act,kb,gp_btn),daemon=True).start()
                             self._logit(g['name'],act,kb,macro,mode_tag='TOG OFF')
             else:
                 # Gesture dropped below threshold
                 if mode == 'hold' and self.hold_active[gid]:
                     # Release the held key/button
                     if act in _HOLDABLE_ACTIONS:
-                        threading.Thread(target=execute_hold_stop,args=(act,kb),daemon=True).start()
+                        threading.Thread(target=execute_hold_stop,args=(act,kb,gp_btn),daemon=True).start()
                     self.hold_active[gid] = False
                 self.ta[gid]=False; self.hs[gid]=0
 
@@ -1757,7 +2386,7 @@ class MainWindow(QMainWindow):
                         a_state = chain.get_action_state()
                         self.dc += 1; self.dl.setText(f"Detections: {self.dc}")
                         threading.Thread(target=execute_action,
-                            args=(a_state['action'], a_state['keyBind'], a_state['command'], a_state['macro']),
+                            args=(a_state['action'], a_state['keyBind'], a_state['command'], a_state['macro'], a_state.get('gamepadBtn','')),
                             daemon=True).start()
                         chain_name = chain.name_lbl.text()
                         self._logit(f"\u26A1{chain_name}", a_state['action'], a_state['keyBind'], a_state['macro'], mode_tag='CHAIN')
@@ -1803,7 +2432,7 @@ class MainWindow(QMainWindow):
                                     self._mc_buf[cid] = []; buf = []; chain.flash_match()
                                     self.dc += 1; self.dl.setText(f"Detections: {self.dc}")
                                     threading.Thread(target=execute_action,
-                                        args=(a_state['action'], a_state['keyBind'], a_state['command'], a_state['macro']),
+                                        args=(a_state['action'], a_state['keyBind'], a_state['command'], a_state['macro'], a_state.get('gamepadBtn','')),
                                         daemon=True).start()
                                     self._logit(f"\u2505{chain.name_lbl.text()}", a_state['action'], a_state['keyBind'], a_state['macro'], mode_tag='MORSE')
                                     matched = True; break
@@ -1897,38 +2526,19 @@ class MainWindow(QMainWindow):
         self.logl.setText('<br>'.join(list(self.alog)[:8]))
 
     def _exp(self):
-        cfg={'version':'0.5.0','gestures':{gid:c.get_state() for gid,c in self.cards.items()},
-             'chains':[c.get_state() for c in self.chains],
-             'morse_chains':[c.get_state() for c in self.morse_chains],
-             'global':{'smoothing':self.sms.value(),'cooldown':self.cds.value(),'holdTime':self.hds.value(),'tiltComp':self.pcs.value(),'zoom':self.zs.value(),'panX':self.pxs.value(),'panY':self.pys.value()}}
+        cfg = self._get_cfg()
         p,_=QFileDialog.getSaveFileName(self,"Export","gestures_config.json","JSON (*.json)")
         if p:
             with open(p,'w') as f: json.dump(cfg,f,indent=2)
+            self._auto_save()
 
     def _imp(self):
         p,_=QFileDialog.getOpenFileName(self,"Import","","JSON (*.json)")
         if not p: return
         try:
             with open(p) as f: cfg=json.load(f)
-            if 'gestures' in cfg:
-                for gid,s in cfg['gestures'].items():
-                    if gid in self.cards: self.cards[gid].set_state(s)
-            # Remove existing chains first
-            for ch in list(self.chains): self._remove_chain(ch)
-            for ch in list(self.morse_chains): self._remove_morse_chain(ch)
-            if 'chains' in cfg:
-                for cs in cfg['chains']:
-                    self._add_chain()
-                    self.chains[-1].set_state(cs)
-            if 'morse_chains' in cfg:
-                for cs in cfg['morse_chains']:
-                    self._add_morse_chain()
-                    self.morse_chains[-1].set_state(cs)
-            if 'global' in cfg:
-                g=cfg['global']; self.sms.setValue(g.get('smoothing',9))
-                self.cds.setValue(g.get('cooldown',650)); self.hds.setValue(g.get('holdTime',200))
-                self.pcs.setValue(g.get('tiltComp',35)); self.zs.setValue(g.get('zoom',100))
-                self.pxs.setValue(g.get('panX',0)); self.pys.setValue(g.get('panY',0))
+            self._apply_cfg(cfg)
+            self._auto_save()
         except Exception as e: print(f"Import error: {e}")
 
     def _rst(self):
@@ -1936,10 +2546,56 @@ class MainWindow(QMainWindow):
         for ch in list(self.chains): self._remove_chain(ch)
         for ch in list(self.morse_chains): self._remove_morse_chain(ch)
         for c in self.cards.values(): c.reset_def()
-        self.sms.setValue(9); self.cds.setValue(650); self.hds.setValue(200); self.pcs.setValue(35)
+        self.sms.setValue(12); self.cds.setValue(650); self.hds.setValue(200); self.dzs.setValue(3); self.pcs.setValue(35)
         self.zs.setValue(100); self.pxs.setValue(0); self.pys.setValue(0)
+        self._reset_cam_settings(); self.res_cb.setCurrentIndex(1)
+        self._auto_save()
 
-    def closeEvent(self,e): self._release_all_holds(); self._stop(); e.accept()
+    def _get_cfg(self):
+        return {'version':'0.6.0','gestures':{gid:c.get_state() for gid,c in self.cards.items()},
+             'chains':[c.get_state() for c in self.chains],
+             'morse_chains':[c.get_state() for c in self.morse_chains],
+             'camera': self._get_cam_settings_state(),
+             'global':{'smoothing':self.sms.value(),'cooldown':self.cds.value(),'holdTime':self.hds.value(),'deadZone':self.dzs.value(),'tiltComp':self.pcs.value(),'zoom':self.zs.value(),'panX':self.pxs.value(),'panY':self.pys.value()}}
+
+    def _apply_cfg(self, cfg):
+        if 'gestures' in cfg:
+            for gid,s in cfg['gestures'].items():
+                if gid in self.cards: self.cards[gid].set_state(s)
+        # Remove existing chains first
+        for ch in list(self.chains): self._remove_chain(ch)
+        for ch in list(self.morse_chains): self._remove_morse_chain(ch)
+        if 'chains' in cfg:
+            for cs in cfg['chains']:
+                self._add_chain()
+                self.chains[-1].set_state(cs)
+        if 'morse_chains' in cfg:
+            for cs in cfg['morse_chains']:
+                self._add_morse_chain()
+                self.morse_chains[-1].set_state(cs)
+        if 'camera' in cfg:
+            self._set_cam_settings_state(cfg['camera'])
+        if 'global' in cfg:
+            g=cfg['global']; self.sms.setValue(g.get('smoothing',12))
+            self.cds.setValue(g.get('cooldown',650)); self.hds.setValue(g.get('holdTime',200))
+            self.dzs.setValue(g.get('deadZone',3))
+            self.pcs.setValue(g.get('tiltComp',35)); self.zs.setValue(g.get('zoom',100))
+            self.pxs.setValue(g.get('panX',0)); self.pys.setValue(g.get('panY',0))
+
+    def _auto_save(self):
+        try:
+            cfg = self._get_cfg()
+            with open(self._auto_profile, 'w') as f: json.dump(cfg, f, indent=2)
+        except Exception as e: print(f"Auto-save error: {e}")
+
+    def _auto_load(self):
+        if os.path.exists(self._auto_profile):
+            try:
+                with open(self._auto_profile) as f: cfg = json.load(f)
+                self._apply_cfg(cfg)
+            except Exception as e: print(f"Auto-load error: {e}")
+
+    def closeEvent(self,e): self._auto_save(); self._release_all_holds(); self._stop(); VirtualGamepad.destroy(); e.accept()
 
 # ÃƒÂ¢Ã¢â‚¬Â¢Ã‚ÂÃƒÂ¢Ã¢â‚¬Â¢Ã‚ÂÃƒÂ¢Ã¢â‚¬Â¢Ã‚Â ENTRY ÃƒÂ¢Ã¢â‚¬Â¢Ã‚ÂÃƒÂ¢Ã¢â‚¬Â¢Ã‚ÂÃƒÂ¢Ã¢â‚¬Â¢Ã‚Â
 
