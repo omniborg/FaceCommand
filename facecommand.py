@@ -21,8 +21,9 @@ try: import numpy as np
 except ImportError: _missing.append("numpy")
 try:
     from PyQt6.QtWidgets import *
-    from PyQt6.QtCore import Qt, QThread, pyqtSignal, pyqtSlot, QMutex, QMutexLocker
-    from PyQt6.QtGui import QImage, QPixmap, QKeySequence
+    from PyQt6.QtCore import Qt, QThread, pyqtSignal, pyqtSlot, QMutex, QMutexLocker, QByteArray
+    from PyQt6.QtGui import QImage, QPixmap, QKeySequence, QPainter as _QPainter, QIcon
+    from PyQt6.QtSvg import QSvgRenderer
 except ImportError: _missing.append("PyQt6")
 
 # Optional: virtual gamepad support (ViGEmBus + vgamepad)
@@ -874,23 +875,70 @@ class CameraThread(QThread):
 # ÃƒÂ¢Ã¢â‚¬Â¢Ã‚ÂÃƒÂ¢Ã¢â‚¬Â¢Ã‚ÂÃƒÂ¢Ã¢â‚¬Â¢Ã‚Â GESTURE DEFS ÃƒÂ¢Ã¢â‚¬Â¢Ã‚ÂÃƒÂ¢Ã¢â‚¬Â¢Ã‚ÂÃƒÂ¢Ã¢â‚¬Â¢Ã‚Â
 
 GESTURES = [
-    dict(id='eyebrow_raise', name='Eyebrow Raise', sub='Both eyebrows up', icon='\U0001F928', color='#00d4ff', ds=50, dtmin=30, dtmax=80),
-    dict(id='eyebrow_raise_left', name='Left Eyebrow', sub='Left eyebrow only', icon='\U0001F914', color='#00d4ff', ds=50, dtmin=79, dtmax=100),
-    dict(id='eyebrow_raise_right', name='Right Eyebrow', sub='Right eyebrow only', icon='\U0001F9D0', color='#00d4ff', ds=50, dtmin=81, dtmax=100),
-    dict(id='brow_furrow', name='Brow Furrow', sub='Brows down & together', icon='\U0001F620', color='#cc44ff', ds=50, dtmin=30, dtmax=80),
-    dict(id='blink', name='Blink', sub='Both eyes closed', icon='\U0001F611', color='#00ff88', ds=50, dtmin=40, dtmax=70),
-    dict(id='wink_left', name='Wink Left', sub='Left eye only', icon='\U0001F609', color='#ffaa00', ds=50, dtmin=82, dtmax=100),
-    dict(id='wink_right', name='Wink Right', sub='Right eye only', icon='\U0001F61C', color='#ffaa00', ds=50, dtmin=82, dtmax=100),
-    dict(id='smile', name='Smile', sub='Mouth corners up', icon='\U0001F60A', color='#00ff88', ds=50, dtmin=27, dtmax=100),
-    dict(id='mouth_open', name='Mouth Open', sub='Jaw drop detected', icon='\U0001F62E', color='#ff4466', ds=50, dtmin=25, dtmax=100),
-    dict(id='pucker', name='Pucker', sub='Lips pursed/narrowed', icon='\U0001F48B', color='#ff66aa', ds=50, dtmin=30, dtmax=85),
-    dict(id='smirk_left', name='Left Smirk', sub='Left corner raised', icon='\U0001F60F', color='#44ddaa', ds=50, dtmin=35, dtmax=90),
-    dict(id='smirk_right', name='Right Smirk', sub='Right corner raised', icon='\U0001F60F', color='#44ddaa', ds=50, dtmin=35, dtmax=90),
-    dict(id='head_up', name='Head Up', sub='Tilt head upward', icon='\u2B06', color='#aa66ff', ds=50, dtmin=15, dtmax=100),
-    dict(id='head_down', name='Head Down', sub='Tilt head downward', icon='\u2B07', color='#aa66ff', ds=50, dtmin=15, dtmax=100),
-    dict(id='head_left', name='Head Left', sub='Turn head left', icon='\u2B05', color='#66aaff', ds=50, dtmin=15, dtmax=100),
-    dict(id='head_right', name='Head Right', sub='Turn head right', icon='\u27A1', color='#66aaff', ds=50, dtmin=15, dtmax=100),
+    dict(id='eyebrow_raise', name='Eyebrow Raise', sub='Both eyebrows up', color='#00d4ff', ds=50, dtmin=30, dtmax=80),
+    dict(id='eyebrow_raise_left', name='Left Eyebrow', sub='Left eyebrow only', color='#00d4ff', ds=50, dtmin=79, dtmax=100),
+    dict(id='eyebrow_raise_right', name='Right Eyebrow', sub='Right eyebrow only', color='#00d4ff', ds=50, dtmin=81, dtmax=100),
+    dict(id='brow_furrow', name='Brow Furrow', sub='Brows down & together', color='#cc44ff', ds=50, dtmin=30, dtmax=80),
+    dict(id='blink', name='Blink', sub='Both eyes closed', color='#00ff88', ds=50, dtmin=40, dtmax=70),
+    dict(id='wink_left', name='Wink Left', sub='Left eye only', color='#ffaa00', ds=50, dtmin=82, dtmax=100),
+    dict(id='wink_right', name='Wink Right', sub='Right eye only', color='#ffaa00', ds=50, dtmin=82, dtmax=100),
+    dict(id='smile', name='Smile', sub='Mouth corners up', color='#00ff88', ds=50, dtmin=27, dtmax=100),
+    dict(id='mouth_open', name='Mouth Open', sub='Jaw drop detected', color='#ff4466', ds=50, dtmin=25, dtmax=100),
+    dict(id='pucker', name='Pucker', sub='Lips pursed/narrowed', color='#ff66aa', ds=50, dtmin=30, dtmax=85),
+    dict(id='smirk_left', name='Left Smirk', sub='Left corner raised', color='#44ddaa', ds=50, dtmin=35, dtmax=90),
+    dict(id='smirk_right', name='Right Smirk', sub='Right corner raised', color='#44ddaa', ds=50, dtmin=35, dtmax=90),
+    dict(id='head_up', name='Head Up', sub='Tilt head upward', color='#aa66ff', ds=50, dtmin=15, dtmax=100),
+    dict(id='head_down', name='Head Down', sub='Tilt head downward', color='#aa66ff', ds=50, dtmin=15, dtmax=100),
+    dict(id='head_left', name='Head Left', sub='Turn head left', color='#66aaff', ds=50, dtmin=15, dtmax=100),
+    dict(id='head_right', name='Head Right', sub='Turn head right', color='#66aaff', ds=50, dtmin=15, dtmax=100),
 ]
+
+# ••• SVG GESTURE ICONS •••
+
+GESTURE_SVGS = {
+    'eyebrow_raise': '<path d="M2 12C4 7 8 6 11 10" stroke="{c}" stroke-width="2.5" stroke-linecap="round"/><path d="M13 10C16 6 20 7 22 12" stroke="{c}" stroke-width="2.5" stroke-linecap="round"/>',
+    'eyebrow_raise_left': '<path d="M2 12C4 6 8 5 11 10" stroke="{c}" stroke-width="2.5" stroke-linecap="round"/><path d="M14 13L22 13" stroke="{c}" stroke-width="2.5" stroke-linecap="round" opacity="0.5"/>',
+    'eyebrow_raise_right': '<path d="M3 13L10 13" stroke="{c}" stroke-width="2.5" stroke-linecap="round" opacity="0.5"/><path d="M13 10C16 5 20 6 22 12" stroke="{c}" stroke-width="2.5" stroke-linecap="round"/>',
+    'brow_furrow': '<path d="M3 8L11 14" stroke="{c}" stroke-width="2.5" stroke-linecap="round"/><path d="M21 8L13 14" stroke="{c}" stroke-width="2.5" stroke-linecap="round"/>',
+    'blink': '<path d="M2 12C5 15 8 16 11 12" stroke="{c}" stroke-width="2.5" stroke-linecap="round"/><path d="M13 12C16 16 19 15 22 12" stroke="{c}" stroke-width="2.5" stroke-linecap="round"/>',
+    'wink_left': '<path d="M2 12C5 15 8 16 11 12" stroke="{c}" stroke-width="2.5" stroke-linecap="round"/><path d="M14 12L22 12" stroke="{c}" stroke-width="2.5" stroke-linecap="round" opacity="0.5"/>',
+    'wink_right': '<path d="M2 12L10 12" stroke="{c}" stroke-width="2.5" stroke-linecap="round" opacity="0.5"/><path d="M13 12C16 16 19 15 22 12" stroke="{c}" stroke-width="2.5" stroke-linecap="round"/>',
+    'smile': '<path d="M6 13C8 18 16 18 18 13" stroke="{c}" stroke-width="2.5" stroke-linecap="round"/>',
+    'mouth_open': '<ellipse cx="12" cy="13" rx="6" ry="7" fill="{c}" opacity="0.25"/><ellipse cx="12" cy="13" rx="6" ry="7" stroke="{c}" stroke-width="2.5" fill="none"/>',
+    'pucker': '<ellipse cx="12" cy="12" rx="3" ry="4" fill="{c}" opacity="0.25"/><ellipse cx="12" cy="12" rx="3" ry="4" stroke="{c}" stroke-width="2.5" fill="none"/>',
+    'smirk_left': '<path d="M6 11C6 11 8 17 12 15C16 13 18 14 18 14" stroke="{c}" stroke-width="2.5" stroke-linecap="round" fill="none"/>',
+    'smirk_right': '<path d="M6 14C6 14 8 13 12 15C16 17 18 11 18 11" stroke="{c}" stroke-width="2.5" stroke-linecap="round" fill="none"/>',
+    'head_up': '<circle cx="12" cy="14" r="7" stroke="{c}" stroke-width="2" fill="none" opacity="0.4"/><path d="M12 3L8 9H16L12 3Z" fill="{c}"/>',
+    'head_down': '<circle cx="12" cy="10" r="7" stroke="{c}" stroke-width="2" fill="none" opacity="0.4"/><path d="M12 21L8 15H16L12 21Z" fill="{c}"/>',
+    'head_left': '<circle cx="14" cy="12" r="7" stroke="{c}" stroke-width="2" fill="none" opacity="0.4"/><path d="M3 12L9 8V16L3 12Z" fill="{c}"/>',
+    'head_right': '<circle cx="10" cy="12" r="7" stroke="{c}" stroke-width="2" fill="none" opacity="0.4"/><path d="M21 12L15 8V16L21 12Z" fill="{c}"/>',
+}
+
+def _build_svg(gesture_id, color):
+    inner = GESTURE_SVGS.get(gesture_id, '')
+    return f'<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none">{inner.format(c=color)}</svg>'
+
+def gesture_icon_pixmap(gesture_id, size, color):
+    svg_str = _build_svg(gesture_id, color)
+    renderer = QSvgRenderer(QByteArray(svg_str.encode('utf-8')))
+    pixmap = QPixmap(size, size)
+    pixmap.fill(Qt.GlobalColor.transparent)
+    painter = _QPainter(pixmap)
+    renderer.render(painter)
+    painter.end()
+    return pixmap
+
+def gesture_icon_qicon(gesture_id, color, size=20):
+    return QIcon(gesture_icon_pixmap(gesture_id, size, color))
+
+def _gesture_icon_label(gesture_id, color, size=30):
+    lbl = QLabel()
+    lbl.setFixedSize(size, size)
+    lbl.setAlignment(Qt.AlignmentFlag.AlignCenter)
+    lbl.setStyleSheet(f"background:{color}33;border-radius:{size//5}px;border:none;")
+    pm = gesture_icon_pixmap(gesture_id, int(size * 0.6), color)
+    lbl.setPixmap(pm)
+    return lbl
 
 ACTION_TYPES = [('none','No Action'),('key','Key Press'),('macro','Macro Sequence'),('left_click','Left Click'),
     ('right_click','Right Click'),('double_click','Double Click'),('middle_click','Middle Click'),
@@ -1099,7 +1147,7 @@ class MacroEditor(QFrame):
 
 # ÃƒÂ¢Ã¢â‚¬Â¢ÃƒÂ¢Ã¢â‚¬Â¢ÃƒÂ¢Ã¢â‚¬Â¢ GESTURE CHAIN CARD ÃƒÂ¢Ã¢â‚¬Â¢ÃƒÂ¢Ã¢â‚¬Â¢ÃƒÂ¢Ã¢â‚¬Â¢
 
-GESTURE_CHOICES = [(g['id'], f"{g['icon']} {g['name']}") for g in GESTURES]
+GESTURE_CHOICES = [(g['id'], g['name'], g['color']) for g in GESTURES]
 
 class ChainStepRow(QFrame):
     """A single gesture step in a chain sequence."""
@@ -1119,7 +1167,7 @@ class ChainStepRow(QFrame):
 
         self.gcb = QComboBox(); self.gcb.setFixedHeight(24); self.gcb.setMaxVisibleItems(25)
         self.gcb.addItem("Select gesture...", "")
-        for gid, label in GESTURE_CHOICES: self.gcb.addItem(label, gid)
+        for gid, label, clr in GESTURE_CHOICES: self.gcb.addItem(gesture_icon_qicon(gid, clr), label, gid)
         if gesture_id:
             for i in range(self.gcb.count()):
                 if self.gcb.itemData(i) == gesture_id: self.gcb.setCurrentIndex(i); break
@@ -1207,6 +1255,24 @@ class GestureChainCard(QFrame):
 
         self.me = MacroEditor(); self.me.hide(); ly.addWidget(self.me)
 
+        # Gamepad button picker
+        self.gp_btn_cb = QComboBox(); self.gp_btn_cb.setMaxVisibleItems(25)
+        for btn_id, btn_label in GAMEPAD_BUTTONS: self.gp_btn_cb.addItem(btn_label, btn_id)
+        self.gp_btn_cb.hide(); ly.addWidget(self.gp_btn_cb)
+
+        # Gamepad axis picker + options
+        self.gp_axis_frame = QFrame()
+        self.gp_axis_frame.setObjectName("gpAxisFrameChain")
+        self.gp_axis_frame.setStyleSheet("#gpAxisFrameChain{background:transparent;border:none;}")
+        gp_ax_ly = QVBoxLayout(self.gp_axis_frame); gp_ax_ly.setContentsMargins(0,0,0,0); gp_ax_ly.setSpacing(4)
+        ax_row = QHBoxLayout()
+        self.gp_axis_cb = QComboBox(); self.gp_axis_cb.setMaxVisibleItems(25)
+        for ax_id, ax_label, *_ in GAMEPAD_AXES: self.gp_axis_cb.addItem(ax_label, ax_id)
+        ax_row.addWidget(self.gp_axis_cb)
+        self.gp_invert = QCheckBox("Invert"); self.gp_invert.setStyleSheet("font-size:10px;border:none;")
+        ax_row.addWidget(self.gp_invert); gp_ax_ly.addLayout(ax_row)
+        self.gp_axis_frame.hide(); ly.addWidget(self.gp_axis_frame)
+
         # Progress indicator
         self.progress_lbl = QLabel("Waiting...")
         self.progress_lbl.setStyleSheet("font-family:Consolas;font-size:10px;color:#555570;border:none;padding-top:4px;")
@@ -1218,6 +1284,7 @@ class GestureChainCard(QFrame):
     def _oa(self):
         a = self.ac.currentData()
         self.ke.setVisible(a == 'key'); self.ce.setVisible(a == 'command'); self.me.setVisible(a == 'macro')
+        self.gp_btn_cb.setVisible(a == 'gamepad_button'); self.gp_axis_frame.setVisible(a == 'gamepad_axis')
 
     def add_gesture_step(self, gesture_id=''):
         row = ChainStepRow(gesture_id)
@@ -1248,13 +1315,19 @@ class GestureChainCard(QFrame):
 
     def get_action_state(self):
         return dict(action=self.ac.currentData(), keyBind=self.ke.text(),
-                    command=self.ce.text(), macro=self.me.to_macro_string())
+                    command=self.ce.text(), macro=self.me.to_macro_string(),
+                    gamepadBtn=self.gp_btn_cb.currentData() or '',
+                    gamepadAxis=self.gp_axis_cb.currentData() or '',
+                    gamepadInvert=self.gp_invert.isChecked())
 
     def get_state(self):
         return dict(gestures=self.get_gesture_sequence(),
                     timeout=self.timeout_sl.value(),
                     action=self.ac.currentData(), keyBind=self.ke.text(),
-                    command=self.ce.text(), macro=self.me.to_macro_string())
+                    command=self.ce.text(), macro=self.me.to_macro_string(),
+                    gamepadBtn=self.gp_btn_cb.currentData() or '',
+                    gamepadAxis=self.gp_axis_cb.currentData() or '',
+                    gamepadInvert=self.gp_invert.isChecked())
 
     def set_state(self, s):
         # Clear existing steps
@@ -1266,6 +1339,13 @@ class GestureChainCard(QFrame):
             if self.ac.itemData(i) == a: self.ac.setCurrentIndex(i); break
         self.ke.setText(s.get('keyBind', '')); self.ce.setText(s.get('command', ''))
         self.me.set_from_string(s.get('macro', ''))
+        gb = s.get('gamepadBtn','')
+        for i in range(self.gp_btn_cb.count()):
+            if self.gp_btn_cb.itemData(i)==gb: self.gp_btn_cb.setCurrentIndex(i); break
+        ga = s.get('gamepadAxis','')
+        for i in range(self.gp_axis_cb.count()):
+            if self.gp_axis_cb.itemData(i)==ga: self.gp_axis_cb.setCurrentIndex(i); break
+        self.gp_invert.setChecked(s.get('gamepadInvert', False))
 
     def set_progress(self, step_idx, total):
         if step_idx == 0:
@@ -1404,6 +1484,14 @@ class MorsePatternRow(QFrame):
         self.ac.currentIndexChanged.connect(self._oa); bot.addWidget(self.ac, stretch=1)
         self.ke = KeyCaptureEdit(); self.ke.setFixedWidth(80); self.ke.setFixedHeight(22); self.ke.hide(); bot.addWidget(self.ke)
         self.ce = QLineEdit(); self.ce.setPlaceholderText("Command..."); self.ce.setFixedHeight(22); self.ce.hide(); bot.addWidget(self.ce)
+        # Gamepad button picker
+        self.gp_btn_cb = QComboBox(); self.gp_btn_cb.setFixedHeight(22); self.gp_btn_cb.setMaxVisibleItems(25)
+        for btn_id, btn_label in GAMEPAD_BUTTONS: self.gp_btn_cb.addItem(btn_label, btn_id)
+        self.gp_btn_cb.hide(); bot.addWidget(self.gp_btn_cb)
+        # Gamepad axis picker
+        self.gp_axis_cb = QComboBox(); self.gp_axis_cb.setFixedHeight(22); self.gp_axis_cb.setMaxVisibleItems(25)
+        for ax_id, ax_label, *_ in GAMEPAD_AXES: self.gp_axis_cb.addItem(ax_label, ax_id)
+        self.gp_axis_cb.hide(); bot.addWidget(self.gp_axis_cb)
         outer.addLayout(bot)
         self.me = MacroEditor(); self.me.hide(); outer.addWidget(self.me)
         self._rebuild_symbols()
@@ -1411,6 +1499,7 @@ class MorsePatternRow(QFrame):
     def _oa(self):
         a = self.ac.currentData()
         self.ke.setVisible(a == 'key'); self.ce.setVisible(a == 'command'); self.me.setVisible(a == 'macro')
+        self.gp_btn_cb.setVisible(a == 'gamepad_button'); self.gp_axis_cb.setVisible(a == 'gamepad_axis')
 
     def _add_symbol(self, sym):
         self._symbols.append(sym); self._rebuild_symbols()
@@ -1442,12 +1531,19 @@ class MorsePatternRow(QFrame):
     def get_pattern(self): return list(self._symbols)
     def set_pattern(self, syms): self._symbols = list(syms); self._rebuild_symbols()
     def get_action_state(self):
-        return dict(action=self.ac.currentData(), keyBind=self.ke.text(), command=self.ce.text(), macro=self.me.to_macro_string())
+        return dict(action=self.ac.currentData(), keyBind=self.ke.text(), command=self.ce.text(), macro=self.me.to_macro_string(),
+                    gamepadBtn=self.gp_btn_cb.currentData() or '', gamepadAxis=self.gp_axis_cb.currentData() or '')
     def set_action_state(self, s):
         a = s.get('action', 'none')
         for i in range(self.ac.count()):
             if self.ac.itemData(i) == a: self.ac.setCurrentIndex(i); break
         self.ke.setText(s.get('keyBind', '')); self.ce.setText(s.get('command', '')); self.me.set_from_string(s.get('macro', ''))
+        gb = s.get('gamepadBtn','')
+        for i in range(self.gp_btn_cb.count()):
+            if self.gp_btn_cb.itemData(i)==gb: self.gp_btn_cb.setCurrentIndex(i); break
+        ga = s.get('gamepadAxis','')
+        for i in range(self.gp_axis_cb.count()):
+            if self.gp_axis_cb.itemData(i)==ga: self.gp_axis_cb.setCurrentIndex(i); break
     def get_state(self): return dict(pattern=self._symbols, **self.get_action_state())
     def set_state(self, s): self.set_pattern(s.get('pattern', [])); self.set_action_state(s)
 
@@ -1480,7 +1576,7 @@ class MorseChainCard(QFrame):
         ly.addWidget(self._lbl("Trigger Gesture"))
         self.gcb = QComboBox(); self.gcb.setFixedHeight(26); self.gcb.setMaxVisibleItems(25)
         self.gcb.addItem("Select gesture...", "")
-        for gid, label in GESTURE_CHOICES: self.gcb.addItem(label, gid)
+        for gid, label, clr in GESTURE_CHOICES: self.gcb.addItem(gesture_icon_qicon(gid, clr), label, gid)
         self.gcb.currentIndexChanged.connect(self._on_gesture_changed); ly.addWidget(self.gcb)
         sep0 = QFrame(); sep0.setFrameShape(QFrame.Shape.HLine); sep0.setStyleSheet("color:#2a2a3a;"); ly.addWidget(sep0)
         th_row = QHBoxLayout(); th_row.setSpacing(16)
@@ -1579,8 +1675,7 @@ class GestureCard(QFrame):
         ly = QVBoxLayout(self); ly.setContentsMargins(12,12,12,12); ly.setSpacing(6)
 
         top = QHBoxLayout()
-        ic = QLabel(g['icon']); ic.setFixedSize(30,30); ic.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        ic.setStyleSheet(f"background:{self.color}33;border-radius:6px;font-size:15px;border:none;")
+        ic = _gesture_icon_label(self.gid, self.color, 30)
         top.addWidget(ic)
         nb = QVBoxLayout(); nb.setSpacing(0)
         n=QLabel(g['name']); n.setStyleSheet("font-weight:600;font-size:13px;border:none;")
@@ -1589,44 +1684,50 @@ class GestureCard(QFrame):
         self.en = QCheckBox(); self.en.setChecked(True); top.addWidget(self.en)
         ly.addLayout(top)
 
+        # Collapsible body container - everything below the header
+        self._body = QWidget()
+        self._body.setObjectName("gestureCardBody")
+        self._body.setStyleSheet("#gestureCardBody{background:transparent;border:none;}")
+        bly = QVBoxLayout(self._body); bly.setContentsMargins(0,0,0,0); bly.setSpacing(6)
+
         # Sensitivity (now a multiplier)
         h=QHBoxLayout(); h.addWidget(self._lbl("Sensitivity")); h.addStretch()
-        self.sv=self._mono(f"{_sens_mult(g['ds']):.1f}x"); h.addWidget(self.sv); ly.addLayout(h)
+        self.sv=self._mono(f"{_sens_mult(g['ds']):.1f}x"); h.addWidget(self.sv); bly.addLayout(h)
         self.ss=QSlider(Qt.Orientation.Horizontal); self.ss.setRange(1,100); self.ss.setValue(g['ds'])
-        self.ss.valueChanged.connect(lambda v: self.sv.setText(f"{_sens_mult(v):.1f}x")); ly.addWidget(self.ss)
+        self.ss.valueChanged.connect(lambda v: self.sv.setText(f"{_sens_mult(v):.1f}x")); bly.addWidget(self.ss)
 
         # Threshold
         h2=QHBoxLayout(); h2.addWidget(self._lbl("Threshold")); h2.addStretch()
-        self.tv=self._mono(f"{g['dtmin']}\u2013{g['dtmax']}"); h2.addWidget(self.tv); ly.addLayout(h2)
+        self.tv=self._mono(f"{g['dtmin']}\u2013{g['dtmax']}"); h2.addWidget(self.tv); bly.addLayout(h2)
         tr=QHBoxLayout()
         self.tmin=QSlider(Qt.Orientation.Horizontal); self.tmin.setRange(0,100); self.tmin.setValue(g['dtmin'])
         self.tmax=QSlider(Qt.Orientation.Horizontal); self.tmax.setRange(0,100); self.tmax.setValue(g['dtmax'])
         tol=QLabel("to"); tol.setStyleSheet("font-size:11px;color:#555570;border:none;")
-        tr.addWidget(self.tmin); tr.addWidget(tol); tr.addWidget(self.tmax); ly.addLayout(tr)
+        tr.addWidget(self.tmin); tr.addWidget(tol); tr.addWidget(self.tmax); bly.addLayout(tr)
         self.tmin.valueChanged.connect(self._ut); self.tmax.valueChanged.connect(self._ut)
 
         # Live bar
         self.lb=QProgressBar(); self.lb.setRange(0,100); self.lb.setTextVisible(False); self.lb.setFixedHeight(4)
-        self.lb.setStyleSheet(f"QProgressBar::chunk{{background:{self.color};border-radius:2px;}}"); ly.addWidget(self.lb)
+        self.lb.setStyleSheet(f"QProgressBar::chunk{{background:{self.color};border-radius:2px;}}"); bly.addWidget(self.lb)
 
         # Action
-        sep=QFrame(); sep.setFrameShape(QFrame.Shape.HLine); sep.setStyleSheet("color:#2a2a3a;"); ly.addWidget(sep)
-        ly.addWidget(self._lbl("Trigger Action"))
+        sep=QFrame(); sep.setFrameShape(QFrame.Shape.HLine); sep.setStyleSheet("color:#2a2a3a;"); bly.addWidget(sep)
+        bly.addWidget(self._lbl("Trigger Action"))
         ar=QHBoxLayout()
         self.ac=QComboBox(); self.ac.setMaxVisibleItems(25)
         for v,l in action_types: self.ac.addItem(l,v)
         self.ac.currentIndexChanged.connect(self._oa); ar.addWidget(self.ac)
         self.ke=KeyCaptureEdit(); self.ke.hide(); ar.addWidget(self.ke)
         self.ce=QLineEdit(); self.ce.setPlaceholderText("Command..."); self.ce.hide(); ar.addWidget(self.ce)
-        ly.addLayout(ar)
+        bly.addLayout(ar)
 
         # Macro editor (visible when action type is 'macro')
-        self.me=MacroEditor(); self.me.hide(); ly.addWidget(self.me)
+        self.me=MacroEditor(); self.me.hide(); bly.addWidget(self.me)
 
         # Gamepad button picker (visible when action type is 'gamepad_button')
         self.gp_btn_cb = QComboBox(); self.gp_btn_cb.setMaxVisibleItems(25)
         for btn_id, btn_label in GAMEPAD_BUTTONS: self.gp_btn_cb.addItem(btn_label, btn_id)
-        self.gp_btn_cb.hide(); ly.addWidget(self.gp_btn_cb)
+        self.gp_btn_cb.hide(); bly.addWidget(self.gp_btn_cb)
 
         # Gamepad axis picker + options (visible when action type is 'gamepad_axis')
         self.gp_axis_frame = QFrame()
@@ -1647,21 +1748,33 @@ class GestureCard(QFrame):
         self.gp_dz_val = QLabel("5%"); self.gp_dz_val.setStyleSheet("font-family:Consolas;font-size:10px;color:#00ff88;min-width:28px;border:none;")
         self.gp_deadzone.valueChanged.connect(lambda v: self.gp_dz_val.setText(f"{v}%")); dz_row.addWidget(self.gp_dz_val)
         gp_ax_ly.addLayout(dz_row)
-        self.gp_axis_frame.hide(); ly.addWidget(self.gp_axis_frame)
+        self.gp_axis_frame.hide(); bly.addWidget(self.gp_axis_frame)
 
         # Trigger mode
-        ly.addWidget(self._lbl("Trigger Mode"))
+        bly.addWidget(self._lbl("Trigger Mode"))
         mr=QHBoxLayout()
         self.tm=QComboBox(); self.tm.setMaxVisibleItems(25)
         for v,l in TRIGGER_MODES: self.tm.addItem(l,v)
         self.tm.setToolTip("Single Press: fire once per activation\nHold (Sustain): held while gesture active\nToggle: first activation starts, second stops\nAnalog: continuous axis output proportional to gesture intensity")
         mr.addWidget(self.tm)
         self.tml=QLabel(""); self.tml.setStyleSheet("font-size:10px;color:#555570;border:none;"); mr.addWidget(self.tml)
-        self.tm.currentIndexChanged.connect(self._otm); ly.addLayout(mr)
+        self.tm.currentIndexChanged.connect(self._otm); bly.addLayout(mr)
+
+        ly.addWidget(self._body)
+
+        # Connect checkbox to collapse/expand
+        self.en.toggled.connect(self._toggle_body)
+        self._toggle_body(self.en.isChecked())
 
     def _lbl(self,t): l=QLabel(t); l.setStyleSheet("font-size:11px;border:none;"); return l
     def _mono(self,t): l=QLabel(t); l.setStyleSheet("font-family:Consolas;font-size:11px;color:#555570;border:none;"); return l
     def _ut(self): self.tv.setText(f"{self.tmin.value()}\u2013{self.tmax.value()}")
+    def _toggle_body(self, checked):
+        self._body.setVisible(checked)
+        if checked:
+            self.setStyleSheet(f"background:#16161f;border:1px solid #2a2a3a;border-radius:10px;")
+        else:
+            self.setStyleSheet(f"background:#16161f;border:1px solid #1a1a24;border-radius:10px;")
     def _oa(self):
         a=self.ac.currentData()
         self.ke.setVisible(a=='key')
@@ -1920,18 +2033,31 @@ class MainWindow(QMainWindow):
 
         self.fl=QLabel("-- fps"); self.fl.setStyleSheet("font-family:Consolas;font-size:11px;color:#00ff88;padding:4px 12px;"); ll.addWidget(self.fl)
 
-        ll.addWidget(self._sec("LIVE READINGS"))
-        rsa=QScrollArea(); rsa.setWidgetResizable(True); rw=QWidget(); rly=QVBoxLayout(rw); rly.setContentsMargins(8,4,8,4); rly.setSpacing(2)
+        # Live readings header with filter
+        lr_hdr=QHBoxLayout(); lr_hdr.setContentsMargins(12,8,12,4); lr_hdr.setSpacing(6)
+        lr_hdr.addWidget(self._sec("LIVE READINGS"))
+        lr_hdr.addStretch()
+        self.lr_filter=QComboBox(); self.lr_filter.setFixedHeight(20); self.lr_filter.setFixedWidth(110)
+        self.lr_filter.setStyleSheet("font-size:10px;padding:1px 6px;background:#1e1e2a;border:1px solid #2a2a3a;border-radius:4px;color:#8888a0;")
+        self.lr_filter.addItem("All Gestures", "all"); self.lr_filter.addItem("Active Only", "active")
+        self.lr_filter.currentIndexChanged.connect(self._update_lr_filter)
+        lr_hdr.addWidget(self.lr_filter)
+        lr_hdr_w=QWidget(); lr_hdr_w.setLayout(lr_hdr); ll.addWidget(lr_hdr_w)
+
+        rsa=QScrollArea(); rsa.setWidgetResizable(True); rw=QWidget(); rly=QVBoxLayout(rw); rly.setContentsMargins(8,4,8,4); rly.setSpacing(0)
+        self.rrows={}  # gesture_id -> QWidget row container
         for g in GESTURES:
-            row=QHBoxLayout(); row.setSpacing(8)
-            ic=QLabel(g['icon']); ic.setFixedSize(20,20); ic.setAlignment(Qt.AlignmentFlag.AlignCenter)
-            ic.setStyleSheet(f"background:{g['color']}22;color:{g['color']};border-radius:4px;font-size:11px;"); row.addWidget(ic)
+            row_w=QWidget(); row_w.setObjectName("lrRow")
+            row_w.setStyleSheet("#lrRow{background:transparent;border:none;}")
+            row_w.setFixedHeight(24)
+            row=QHBoxLayout(row_w); row.setContentsMargins(0,2,0,2); row.setSpacing(8)
+            ic = _gesture_icon_label(g['id'], g['color'], 20); row.addWidget(ic)
             nm=QLabel(g['name']); nm.setStyleSheet("font-size:11px;color:#8888a0;"); nm.setMinimumWidth(90); row.addWidget(nm); row.addStretch()
             bar=QProgressBar(); bar.setRange(0,100); bar.setTextVisible(False); bar.setFixedWidth(80); bar.setFixedHeight(4)
             bar.setStyleSheet(f"QProgressBar::chunk{{background:{g['color']};border-radius:2px;}}"); row.addWidget(bar); self.rbars[g['id']]=bar
             vl=QLabel("0"); vl.setStyleSheet(f"font-family:Consolas;font-size:11px;color:{g['color']};min-width:28px;")
             vl.setAlignment(Qt.AlignmentFlag.AlignRight|Qt.AlignmentFlag.AlignVCenter); row.addWidget(vl); self.rvals[g['id']]=vl
-            rly.addLayout(row)
+            rly.addWidget(row_w); self.rrows[g['id']]=row_w
         rsa.setWidget(rw); ll.addWidget(rsa, stretch=1)
 
         sep=QFrame(); sep.setFrameShape(QFrame.Shape.HLine); sep.setStyleSheet("color:#2a2a3a;"); ll.addWidget(sep)
@@ -1987,6 +2113,9 @@ class MainWindow(QMainWindow):
             at = ACTION_TYPES_RIGHT_EYEBROW if gid == 'eyebrow_raise_right' else ACTION_TYPES
             card = GestureCard(g, action_types=at); self.cards[gid] = card
             grid.addWidget(card, row, col)
+        # Connect card enable toggles to live readings filter
+        for gid, card in self.cards.items():
+            card.en.toggled.connect(self._update_lr_filter)
         rl.addLayout(grid)
 
         rl.addWidget(self._sec("GLOBAL SETTINGS"))
@@ -2012,6 +2141,18 @@ class MainWindow(QMainWindow):
 
     def _sec(self, t):
         l=QLabel(t); l.setStyleSheet("font-family:Consolas;font-size:10px;color:#555570;letter-spacing:1.5px;font-weight:600;padding:8px 12px 4px;"); return l
+
+    def _update_lr_filter(self):
+        """Show/hide live reading rows based on filter selection."""
+        show_all = self.lr_filter.currentData() == 'all'
+        for g in GESTURES:
+            gid = g['id']
+            if gid in self.rrows:
+                if show_all:
+                    self.rrows[gid].setVisible(True)
+                else:
+                    enabled = self.cards[gid].en.isChecked() if gid in self.cards else True
+                    self.rrows[gid].setVisible(enabled)
 
     def _gslider(self, parent_layout, label, mn, mx, default, step=1):
         h=QHBoxLayout(); l=QLabel(label); l.setStyleSheet("font-size:11px;border:none;"); h.addWidget(l); h.addStretch()
