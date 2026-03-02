@@ -73,6 +73,8 @@ Gesture Chains allow for sequences of gestures to trigger a single command or ma
 
 Morse Chains allow a single gesture to trigger unlimited commands via short and long holds 
 
+Toggle Gestures button and Trigger Action
+
 Profile export/import
 
 While it's possible to use all of the gestures simultaneously, there is still some crosstalk between certain gestures that move similar parts of the face. This is especially true when moving your head around. This will be improved as I incorporate more head orientation compensation and better sensitivity control. I want to include as many gestures as possible because people have different abilities to control their face. Even with just a few gestures, many commands can be made with the Gesture Chains tool.
