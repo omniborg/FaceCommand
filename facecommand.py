@@ -239,6 +239,7 @@ def execute_macro(macro_str):
 def execute_action(action_type, key_bind='', command='', macro='', gamepad_btn='', gamepad_axis_id=''):
     """Execute a single-fire action (original behavior + macro + gamepad support)."""
     if not action_type or action_type == 'none': return
+    if action_type == 'toggle_gestures': return  # handled by MainWindow directly
     if action_type == 'key': execute_key_press(key_bind)
     elif action_type == 'macro': execute_macro(macro)
     elif action_type == 'the_rock': play_sound_file('the_rock.mp3')
@@ -943,10 +944,14 @@ def _gesture_icon_label(gesture_id, color, size=30):
 ACTION_TYPES = [('none','No Action'),('key','Key Press'),('macro','Macro Sequence'),('left_click','Left Click'),
     ('right_click','Right Click'),('double_click','Double Click'),('middle_click','Middle Click'),
     ('scroll_up','Scroll Up'),('scroll_down','Scroll Down'),('drag_toggle','Drag Toggle'),('command','Run Command'),
-    ('gamepad_button','\U0001F3AE Gamepad Button'),('gamepad_axis','\U0001F579 Gamepad Axis')]
+    ('gamepad_button','\U0001F3AE Gamepad Button'),('gamepad_axis','\U0001F579 Gamepad Axis'),
+    ('toggle_gestures','\U0001F507 Toggle Gestures')]
 
 # Right eyebrow gets the bonus "The Rock" action
 ACTION_TYPES_RIGHT_EYEBROW = ACTION_TYPES[:3] + [('the_rock','\U0001FAA8 The Rock')] + ACTION_TYPES[3:]
+
+# Note for toggle_gestures: displayed in tooltip/UI where action is selected
+_TOGGLE_GESTURES_NOTE = "⚠ Recommended: Use with Gesture Chain or Morse Chain to minimize false activations."
 
 TRIGGER_MODES = [('single','Single Press'),('hold','Hold (Sustain)'),('toggle','Toggle On/Off'),('analog','Analog (Continuous)')]
 
@@ -1273,6 +1278,12 @@ class GestureChainCard(QFrame):
         ax_row.addWidget(self.gp_invert); gp_ax_ly.addLayout(ax_row)
         self.gp_axis_frame.hide(); ly.addWidget(self.gp_axis_frame)
 
+        # Toggle gestures note (informational for chains - they're already a good trigger)
+        self._toggle_note = QLabel("✓ Gesture chains are a good choice for this action.")
+        self._toggle_note.setWordWrap(True)
+        self._toggle_note.setStyleSheet("font-size:10px;color:#00ff88;background:#00ff8815;border:1px solid #00ff8833;border-radius:4px;padding:4px 6px;")
+        self._toggle_note.hide(); ly.addWidget(self._toggle_note)
+
         # Progress indicator
         self.progress_lbl = QLabel("Waiting...")
         self.progress_lbl.setStyleSheet("font-family:Consolas;font-size:10px;color:#555570;border:none;padding-top:4px;")
@@ -1285,6 +1296,7 @@ class GestureChainCard(QFrame):
         a = self.ac.currentData()
         self.ke.setVisible(a == 'key'); self.ce.setVisible(a == 'command'); self.me.setVisible(a == 'macro')
         self.gp_btn_cb.setVisible(a == 'gamepad_button'); self.gp_axis_frame.setVisible(a == 'gamepad_axis')
+        self._toggle_note.setVisible(a == 'toggle_gestures')
 
     def add_gesture_step(self, gesture_id=''):
         row = ChainStepRow(gesture_id)
@@ -1494,12 +1506,18 @@ class MorsePatternRow(QFrame):
         self.gp_axis_cb.hide(); bot.addWidget(self.gp_axis_cb)
         outer.addLayout(bot)
         self.me = MacroEditor(); self.me.hide(); outer.addWidget(self.me)
+        # Toggle gestures note (informational for morse - they're already a good trigger)
+        self._toggle_note = QLabel("✓ Morse chains are a good choice for this action.")
+        self._toggle_note.setWordWrap(True)
+        self._toggle_note.setStyleSheet("font-size:10px;color:#00ff88;background:#00ff8815;border:1px solid #00ff8833;border-radius:4px;padding:4px 6px;")
+        self._toggle_note.hide(); outer.addWidget(self._toggle_note)
         self._rebuild_symbols()
 
     def _oa(self):
         a = self.ac.currentData()
         self.ke.setVisible(a == 'key'); self.ce.setVisible(a == 'command'); self.me.setVisible(a == 'macro')
         self.gp_btn_cb.setVisible(a == 'gamepad_button'); self.gp_axis_cb.setVisible(a == 'gamepad_axis')
+        self._toggle_note.setVisible(a == 'toggle_gestures')
 
     def _add_symbol(self, sym):
         self._symbols.append(sym); self._rebuild_symbols()
@@ -1750,6 +1768,12 @@ class GestureCard(QFrame):
         gp_ax_ly.addLayout(dz_row)
         self.gp_axis_frame.hide(); bly.addWidget(self.gp_axis_frame)
 
+        # Toggle gestures recommendation note
+        self._toggle_note = QLabel(_TOGGLE_GESTURES_NOTE)
+        self._toggle_note.setWordWrap(True)
+        self._toggle_note.setStyleSheet("font-size:10px;color:#ffaa00;background:#ffaa0015;border:1px solid #ffaa0033;border-radius:4px;padding:4px 6px;")
+        self._toggle_note.hide(); bly.addWidget(self._toggle_note)
+
         # Trigger mode
         bly.addWidget(self._lbl("Trigger Mode"))
         mr=QHBoxLayout()
@@ -1782,6 +1806,7 @@ class GestureCard(QFrame):
         self.me.setVisible(a=='macro')
         self.gp_btn_cb.setVisible(a=='gamepad_button')
         self.gp_axis_frame.setVisible(a=='gamepad_axis')
+        self._toggle_note.setVisible(a=='toggle_gestures')
         # Auto-select analog trigger mode when gamepad_axis is chosen
         if a=='gamepad_axis':
             for i in range(self.tm.count()):
@@ -1845,6 +1870,10 @@ class MainWindow(QMainWindow):
         self.repeat_lt = {g['id']:0.0 for g in GESTURES}       # last repeat fire time
         self.dc = 0; self.alog = deque(maxlen=50)
         self.cards={}; self.rbars={}; self.rvals={}
+        # Toggle gestures state
+        self._gestures_disabled = False        # True when gestures are toggled off
+        self._saved_gesture_states = {}        # gid -> was_enabled before toggle off
+        self._toggle_exempt_gestures = set()   # gesture IDs that must stay on for the toggle trigger
         # Gesture chains
         self.chains = []          # list of GestureChainCard widgets
         self.morse_chains = []    # list of MorseChainCard widgets
@@ -1889,8 +1918,30 @@ class MainWindow(QMainWindow):
         # Body
         sp=QSplitter(Qt.Orientation.Horizontal); sp.setHandleWidth(1); sp.setStyleSheet("QSplitter::handle{background:#2a2a3a;}")
         left=QWidget(); left.setStyleSheet("background:#12121a;"); ll=QVBoxLayout(left); ll.setContentsMargins(0,0,0,0); ll.setSpacing(0)
-        self.vl=QLabel("\U0001F4F7  Start Camera"); self.vl.setFixedSize(320,240); self.vl.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        self.vl.setStyleSheet("background:#000;border-bottom:1px solid #2a2a3a;font-size:12px;color:#555570;"); ll.addWidget(self.vl)
+        # Webcam feed with overlay toggle button
+        cam_container = QWidget(); cam_container.setFixedHeight(240)
+        cam_container.setStyleSheet("background:#000;border-bottom:1px solid #2a2a3a;")
+        self.vl=QLabel("\U0001F4F7  Start Camera", cam_container); self.vl.setMinimumSize(320,240)
+        self.vl.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        self.vl.setStyleSheet("background:#000;font-size:12px;color:#555570;border:none;")
+        # Use a layout to make vl fill the container
+        _cam_ly = QVBoxLayout(cam_container); _cam_ly.setContentsMargins(0,0,0,0); _cam_ly.setSpacing(0)
+        _cam_ly.addWidget(self.vl)
+        # Toggle Gestures button — compact, top-right corner of feed
+        self._toggle_gestures_btn = QPushButton("\U0001F50A", cam_container)
+        self._toggle_gestures_btn.setFixedSize(32, 32)
+        self._toggle_gestures_btn.setToolTip("Toggle all gestures on/off")
+        self._toggle_gestures_btn.setCursor(Qt.CursorShape.PointingHandCursor)
+        self._update_toggle_btn_style()
+        self._toggle_gestures_btn.clicked.connect(lambda: self._toggle_gestures_from_btn())
+        self._toggle_gestures_btn.raise_()
+        # Position button at top-right of container
+        def _reposition_toggle_btn(event=None):
+            self._toggle_gestures_btn.move(cam_container.width() - 36, 4)
+            if event: type(cam_container).resizeEvent(cam_container, event)
+        cam_container.resizeEvent = _reposition_toggle_btn
+        self._toggle_gestures_btn.move(320 - 36, 4)
+        ll.addWidget(cam_container)
 
         # Zoom & Pan controls
         zpf=QFrame(); zpf.setStyleSheet("background:#12121a;border-bottom:1px solid #2a2a3a;")
@@ -2261,6 +2312,12 @@ class MainWindow(QMainWindow):
         self.chain_state={}; self._mc_hs={}; self._mc_buf={}; self._mc_last={}; self._mc_active={}
         self._chain_hs={g['id']:0.0 for g in GESTURES}
         self._chain_ta={g['id']:False for g in GESTURES}; self._chain_newly=set()
+        # Restore gestures if they were toggled off
+        if self._gestures_disabled:
+            for gid, was_enabled in self._saved_gesture_states.items():
+                if gid in self.cards: self.cards[gid].en.setChecked(was_enabled)
+            self._gestures_disabled = False; self._saved_gesture_states = {}; self._toggle_exempt_gestures = set()
+            self._update_toggle_btn_style()
         # Initialize virtual gamepad if any gesture uses a gamepad action
         self._init_gamepad_if_needed()
         res_idx = self.res_cb.currentIndex()
@@ -2418,8 +2475,11 @@ class MainWindow(QMainWindow):
                     # Original behavior: fire once per activation, with cooldown
                     if held >= ht and not self.ta[gid] and now_ms-self.lt[gid]>cd:
                         self.ta[gid]=True; self.lt[gid]=now_ms; self.dc+=1; self.dl.setText(f"Detections: {self.dc}")
-                        threading.Thread(target=execute_action,args=(act,kb,cmd,macro,gp_btn),daemon=True).start()
-                        self._logit(g['name'],act,kb,macro)
+                        if act == 'toggle_gestures':
+                            self._toggle_gestures(self._collect_toggle_exempt_gestures(f'card:{gid}'))
+                        else:
+                            threading.Thread(target=execute_action,args=(act,kb,cmd,macro,gp_btn),daemon=True).start()
+                            self._logit(g['name'],act,kb,macro)
 
                 elif mode == 'hold':
                     # Sustain: press down on activation, release on deactivation
@@ -2427,7 +2487,9 @@ class MainWindow(QMainWindow):
                         # Start holding
                         self.hold_active[gid] = True; self.ta[gid] = True
                         self.dc+=1; self.dl.setText(f"Detections: {self.dc}")
-                        if act in _HOLDABLE_ACTIONS:
+                        if act == 'toggle_gestures':
+                            self._toggle_gestures(self._collect_toggle_exempt_gestures(f'card:{gid}'))
+                        elif act in _HOLDABLE_ACTIONS:
                             threading.Thread(target=execute_hold_start,args=(act,kb,gp_btn),daemon=True).start()
                         elif act in _REPEATABLE_ACTIONS or act == 'command':
                             # Fire first shot immediately
@@ -2448,7 +2510,9 @@ class MainWindow(QMainWindow):
                     if held >= ht and not self.ta[gid] and now_ms-self.lt[gid]>cd:
                         self.ta[gid] = True; self.lt[gid] = now_ms
                         self.dc+=1; self.dl.setText(f"Detections: {self.dc}")
-                        if not self.toggle_state[gid]:
+                        if act == 'toggle_gestures':
+                            self._toggle_gestures(self._collect_toggle_exempt_gestures(f'card:{gid}'))
+                        elif not self.toggle_state[gid]:
                             # Toggle ON
                             self.toggle_state[gid] = True
                             if act in _HOLDABLE_ACTIONS:
@@ -2526,11 +2590,14 @@ class MainWindow(QMainWindow):
                         cs['step'] = 0; cs['last_time'] = 0.0
                         a_state = chain.get_action_state()
                         self.dc += 1; self.dl.setText(f"Detections: {self.dc}")
-                        threading.Thread(target=execute_action,
-                            args=(a_state['action'], a_state['keyBind'], a_state['command'], a_state['macro'], a_state.get('gamepadBtn','')),
-                            daemon=True).start()
-                        chain_name = chain.name_lbl.text()
-                        self._logit(f"\u26A1{chain_name}", a_state['action'], a_state['keyBind'], a_state['macro'], mode_tag='CHAIN')
+                        if a_state['action'] == 'toggle_gestures':
+                            self._toggle_gestures(self._collect_toggle_exempt_gestures(f'chain:{cid}'))
+                        else:
+                            threading.Thread(target=execute_action,
+                                args=(a_state['action'], a_state['keyBind'], a_state['command'], a_state['macro'], a_state.get('gamepadBtn','')),
+                                daemon=True).start()
+                            chain_name = chain.name_lbl.text()
+                            self._logit(f"\u26A1{chain_name}", a_state['action'], a_state['keyBind'], a_state['macro'], mode_tag='CHAIN')
 
                 # Update chain progress indicator
                 chain.set_progress(cs['step'], len(seq))
@@ -2572,15 +2639,90 @@ class MainWindow(QMainWindow):
                                 if buf == pat:
                                     self._mc_buf[cid] = []; buf = []; chain.flash_match()
                                     self.dc += 1; self.dl.setText(f"Detections: {self.dc}")
-                                    threading.Thread(target=execute_action,
-                                        args=(a_state['action'], a_state['keyBind'], a_state['command'], a_state['macro'], a_state.get('gamepadBtn','')),
-                                        daemon=True).start()
-                                    self._logit(f"\u2505{chain.name_lbl.text()}", a_state['action'], a_state['keyBind'], a_state['macro'], mode_tag='MORSE')
+                                    if a_state['action'] == 'toggle_gestures':
+                                        self._toggle_gestures(self._collect_toggle_exempt_gestures(f'morse:{cid}'))
+                                    else:
+                                        threading.Thread(target=execute_action,
+                                            args=(a_state['action'], a_state['keyBind'], a_state['command'], a_state['macro'], a_state.get('gamepadBtn','')),
+                                            daemon=True).start()
+                                        self._logit(f"\u2505{chain.name_lbl.text()}", a_state['action'], a_state['keyBind'], a_state['macro'], mode_tag='MORSE')
                                     matched = True; break
                             if not matched:
                                 is_prefix = any(pat[:len(buf)] == buf for pat, _ in chain.get_patterns())
                                 if not is_prefix: self._mc_buf[cid] = []; buf = []
                     chain.set_progress(buf, 0.0, False)
+
+    def _toggle_gestures_from_btn(self):
+        """Called by the UI button — no exempt gestures needed since it's a manual button."""
+        self._toggle_gestures(source_gesture_ids=set())
+        self._update_toggle_btn_style()
+
+    def _update_toggle_btn_style(self):
+        """Update the toggle button appearance based on current state."""
+        if self._gestures_disabled:
+            self._toggle_gestures_btn.setText("\U0001F507")
+            self._toggle_gestures_btn.setToolTip("Gestures OFF — click to re-enable")
+            self._toggle_gestures_btn.setStyleSheet(
+                "QPushButton{background:#ff4466aa;border:1px solid #ff4466;border-radius:6px;"
+                "color:#ffffff;font-size:15px;padding:0;}"
+                "QPushButton:hover{background:#ff4466cc;}")
+        else:
+            self._toggle_gestures_btn.setText("\U0001F50A")
+            self._toggle_gestures_btn.setToolTip("Gestures ON — click to disable all")
+            self._toggle_gestures_btn.setStyleSheet(
+                "QPushButton{background:#00ff8833;border:1px solid #00ff8855;border-radius:6px;"
+                "color:#00ff88;font-size:15px;padding:0;}"
+                "QPushButton:hover{background:#00ff8855;}")
+
+    def _toggle_gestures(self, source_gesture_ids=None):
+        """Toggle all gestures off (saving state) or back on (restoring state).
+        source_gesture_ids: set of gesture IDs used by the trigger that fired this toggle.
+        These gestures are kept enabled so the user can toggle gestures back on."""
+        if not self._gestures_disabled:
+            # --- DISABLE: save states and turn off all except exempt ---
+            self._saved_gesture_states = {}
+            # Build exempt set: gestures used by the trigger source
+            self._toggle_exempt_gestures = set(source_gesture_ids) if source_gesture_ids else set()
+            for gid, card in self.cards.items():
+                was_enabled = card.en.isChecked()
+                self._saved_gesture_states[gid] = was_enabled
+                if gid not in self._toggle_exempt_gestures:
+                    card.en.setChecked(False)
+            # Release any held keys/buttons
+            self._release_all_holds()
+            self._gestures_disabled = True
+            self._logit("\U0001F507 Gestures", "toggle_gestures", mode_tag='OFF')
+        else:
+            # --- ENABLE: restore saved states ---
+            for gid, was_enabled in self._saved_gesture_states.items():
+                if gid in self.cards:
+                    self.cards[gid].en.setChecked(was_enabled)
+            self._saved_gesture_states = {}
+            self._toggle_exempt_gestures = set()
+            self._gestures_disabled = False
+            self._logit("\U0001F50A Gestures", "toggle_gestures", mode_tag='ON')
+        self._update_toggle_btn_style()
+
+    def _collect_toggle_exempt_gestures(self, context):
+        """Collect gesture IDs that should stay enabled for a toggle_gestures trigger.
+        context: 'card:<gid>' for individual cards, 'chain:<cid>' for chains, 'morse:<cid>' for morse chains."""
+        exempt = set()
+        if context.startswith('card:'):
+            gid = context[5:]
+            exempt.add(gid)
+        elif context.startswith('chain:'):
+            cid = int(context[6:])
+            for chain in self.chains:
+                if chain.chain_id == cid:
+                    exempt = chain.get_all_gesture_ids()
+                    break
+        elif context.startswith('morse:'):
+            cid = int(context[6:])
+            for chain in self.morse_chains:
+                if chain.chain_id == cid:
+                    exempt = chain.get_all_gesture_ids()
+                    break
+        return exempt
 
     def _add_chain(self):
         cid = self.chain_counter; self.chain_counter += 1
