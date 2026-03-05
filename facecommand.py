@@ -8,6 +8,8 @@ Requirements: pip install PyQt6 opencv-python mediapipe numpy
 """
 
 import sys, os, json, math, time, subprocess, threading, ctypes
+# Disable MSMF hardware transforms to allow shared camera access
+os.environ["OPENCV_VIDEOIO_MSMF_ENABLE_HW_TRANSFORMS"] = "0"
 from ctypes import wintypes
 from datetime import datetime
 from collections import deque
@@ -247,6 +249,11 @@ def execute_action(action_type, key_bind='', command='', macro='', gamepad_btn='
     elif action_type == 'command' and command:
         try: subprocess.Popen(command, shell=True)
         except: pass
+    elif action_type == 'launch_program' and command:
+        try: os.startfile(command)
+        except Exception as e:
+            try: subprocess.Popen([command], shell=False)
+            except: print(f"[LAUNCH] Failed to launch: {command} - {e}")
     else: execute_mouse_action(action_type)
 
 def play_sound_file(filename):
@@ -503,6 +510,115 @@ class LandmarkSmoother:
 
 CAL_N = 45
 
+# ••• POINT TRACKER •••
+
+class PointTracker:
+    """Tracks a user-selected point on the face using template matching.
+    Outputs raw X/Y displacement from the origin as normalized values (-1.0 to 1.0)."""
+
+    def __init__(self, roi_size=31):
+        self._roi_size = roi_size  # half-size of the ROI square
+        self._template = None      # BGR template patch
+        self._origin = None        # (x, y) origin in frame coords when point was set
+        self._current = None       # (x, y) current tracked position
+        self._active = False
+        self._search_scale = 3.0   # search area = roi_size * search_scale
+        self._x_filter = OneEuroFilter(freq=30.0, min_cutoff=1.0, beta=0.05)
+        self._y_filter = OneEuroFilter(freq=30.0, min_cutoff=1.0, beta=0.05)
+
+    @property
+    def active(self):
+        return self._active and self._template is not None
+
+    @property
+    def origin(self):
+        return self._origin
+
+    @property
+    def current(self):
+        return self._current
+
+    @property
+    def roi_size(self):
+        return self._roi_size
+
+    @roi_size.setter
+    def roi_size(self, val):
+        self._roi_size = max(10, min(80, val))
+
+    def set_point(self, frame, x, y):
+        """Set the tracking point from a click on the frame. x,y are pixel coords."""
+        h, w = frame.shape[:2]
+        r = self._roi_size
+        # Clamp to valid region
+        x = max(r, min(w - r - 1, int(x)))
+        y = max(r, min(h - r - 1, int(y)))
+        self._template = frame[y - r:y + r + 1, x - r:x + r + 1].copy()
+        self._origin = (x, y)
+        self._current = (x, y)
+        self._active = True
+        self._x_filter.reset()
+        self._y_filter.reset()
+
+    def clear(self):
+        """Remove the tracking point."""
+        self._template = None
+        self._origin = None
+        self._current = None
+        self._active = False
+        self._x_filter.reset()
+        self._y_filter.reset()
+
+    def track(self, frame):
+        """Track the point in the current frame. Returns (dx, dy) normalized to roughly -1..1,
+        or (0, 0) if not tracking. dx positive = point moved right, dy positive = point moved down."""
+        if not self.active:
+            return 0.0, 0.0
+        h, w = frame.shape[:2]
+        r = self._roi_size
+        ox, oy = self._current  # search around last known position
+        sr = int(r * self._search_scale)
+        # Define search region
+        sx0 = max(0, ox - sr)
+        sy0 = max(0, oy - sr)
+        sx1 = min(w, ox + sr + 1)
+        sy1 = min(h, oy + sr + 1)
+        search_region = frame[sy0:sy1, sx0:sx1]
+        th, tw = self._template.shape[:2]
+        # Check search region is big enough
+        if search_region.shape[0] < th or search_region.shape[1] < tw:
+            return 0.0, 0.0
+        result = cv2.matchTemplate(search_region, self._template, cv2.TM_CCOEFF_NORMED)
+        _, max_val, _, max_loc = cv2.minMaxLoc(result)
+        if max_val < 0.4:
+            # Lost tracking — point changed too much
+            return 0.0, 0.0
+        # max_loc is top-left of matched region within search_region
+        new_x = sx0 + max_loc[0] + r
+        new_y = sy0 + max_loc[1] + r
+        # Update template periodically for drift compensation (blend)
+        if max_val > 0.7:
+            nr = self._roi_size
+            ny0 = max(0, new_y - nr)
+            ny1 = min(h, new_y + nr + 1)
+            nx0 = max(0, new_x - nr)
+            nx1 = min(w, new_x + nr + 1)
+            new_patch = frame[ny0:ny1, nx0:nx1]
+            if new_patch.shape == self._template.shape:
+                # Slow blend to adapt to lighting/angle changes
+                cv2.addWeighted(self._template, 0.92, new_patch, 0.08, 0, self._template)
+        self._current = (new_x, new_y)
+        # Compute displacement from origin, normalize by face region (~200px typical movement range)
+        # The sensitivity/range sliders in the UI will scale this further
+        raw_dx = (new_x - self._origin[0])
+        raw_dy = (new_y - self._origin[1])
+        # Smooth with One-Euro filter
+        t = time.time()
+        dx = self._x_filter(raw_dx, t)
+        dy = self._y_filter(raw_dy, t)
+        return dx, dy
+
+
 class GestureDetector:
     def __init__(self):
         self._lm_smoother = LandmarkSmoother()
@@ -698,21 +814,23 @@ class GestureDetector:
             raw['brow_furrow'] = max(0, min(100, raw_furrow))
 
             # Head yaw (left/right turn)
-            s_yaw = sens.get('head_left', sens.get('head_right', 1.0))
             yaw_dev = head_yaw - self.bl['head_yaw']
             # yaw_dev positive = nose moved right = user turned right (in mirrored view: head_right)
             # Sensitivity divisor: ~0.04 normalized units = full turn at 1x sensitivity
-            raw['head_right'] = max(0, min(100, yaw_dev / (0.04/s_yaw) * 100))
-            raw['head_left'] = max(0, min(100, -yaw_dev / (0.04/s_yaw) * 100))
+            s_yaw_r = sens.get('head_right', 1.0)
+            s_yaw_l = sens.get('head_left', 1.0)
+            raw['head_right'] = max(0, min(100, yaw_dev / (0.04/s_yaw_r) * 100))
+            raw['head_left'] = max(0, min(100, -yaw_dev / (0.04/s_yaw_l) * 100))
 
             # Head pitch (up/down tilt) - combine Z-based pitch and Y-based pitch for robustness
-            s_pitch = sens.get('head_up', sens.get('head_down', 1.0))
+            s_pitch_up = sens.get('head_up', 1.0)
+            s_pitch_dn = sens.get('head_down', 1.0)
             pitch_y_dev = head_pitch_y - self.bl['head_pitch_y']
             # pitch_y_dev positive = nose moved down = looking down
             # pitch_dev (Z-based) positive = forehead closer = looking down
             combined_pitch = pitch_y_dev * 0.6 + pitch_dev * 0.4
-            raw['head_down'] = max(0, min(100, combined_pitch / (0.03/s_pitch) * 100))
-            raw['head_up'] = max(0, min(100, -combined_pitch / (0.03/s_pitch) * 100))
+            raw['head_down'] = max(0, min(100, combined_pitch / (0.03/s_pitch_dn) * 100))
+            raw['head_up'] = max(0, min(100, -combined_pitch / (0.03/s_pitch_up) * 100))
         else:
             for k in ('eyebrow_raise','eyebrow_raise_left','eyebrow_raise_right','mouth_open',
                       'smile','pucker','smirk_left','smirk_right','brow_furrow',
@@ -723,20 +841,9 @@ class GestureDetector:
 # ÃƒÂ¢Ã¢â‚¬Â¢Ã‚ÂÃƒÂ¢Ã¢â‚¬Â¢Ã‚ÂÃƒÂ¢Ã¢â‚¬Â¢Ã‚Â CAMERA THREAD ÃƒÂ¢Ã¢â‚¬Â¢Ã‚ÂÃƒÂ¢Ã¢â‚¬Â¢Ã‚ÂÃƒÂ¢Ã¢â‚¬Â¢Ã‚Â
 
 def enumerate_cameras(max_test=8):
-    """Probe camera indices and return list of (index, backend, name) tuples.
-    Lists all cameras that can be opened, even if initial read fails (MSMF bug)."""
-    results = []
-    for idx in range(max_test):
-        for backend, bname in [(cv2.CAP_MSMF, 'MSMF'), (cv2.CAP_DSHOW, 'DSHOW')]:
-            try:
-                cap = cv2.VideoCapture(idx, backend)
-                if cap.isOpened():
-                    cap.release()
-                    label = f"Camera {idx}"
-                    results.append((idx, backend, label))
-                    break
-            except: pass
-    return results
+    """Return camera indices without opening any devices.
+    Simply returns indices 0..max_test-1 for the user to pick from."""
+    return [(idx, None, f"Camera {idx}") for idx in range(max_test)]
 
 class CameraThread(QThread):
     frame_ready = pyqtSignal(object, object, float)
@@ -944,6 +1051,7 @@ def _gesture_icon_label(gesture_id, color, size=30):
 ACTION_TYPES = [('none','No Action'),('key','Key Press'),('macro','Macro Sequence'),('left_click','Left Click'),
     ('right_click','Right Click'),('double_click','Double Click'),('middle_click','Middle Click'),
     ('scroll_up','Scroll Up'),('scroll_down','Scroll Down'),('drag_toggle','Drag Toggle'),('command','Run Command'),
+    ('launch_program','\U0001F4C2 Launch Program'),
     ('gamepad_button','\U0001F3AE Gamepad Button'),('gamepad_axis','\U0001F579 Gamepad Axis'),
     ('toggle_gestures','\U0001F507 Toggle Gestures')]
 
@@ -1003,6 +1111,28 @@ class KeyCaptureEdit(QLineEdit):
         kt = QKeySequence(e.key()).toString()
         if kt: p.append(kt)
         self.setText('+'.join(p)); self.clearFocus()
+
+
+class LaunchProgramEdit(QFrame):
+    """File picker for launch_program action: shows path + browse button."""
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self.setStyleSheet("background:transparent;border:none;")
+        ly = QHBoxLayout(self); ly.setContentsMargins(0,0,0,0); ly.setSpacing(4)
+        self.path_edit = QLineEdit(); self.path_edit.setPlaceholderText("Program path...")
+        self.path_edit.setStyleSheet("background:#1e1e2a;border:1px solid #2a2a3a;border-radius:4px;color:#e8e8f0;padding:3px 6px;font-family:Consolas;font-size:10px;")
+        ly.addWidget(self.path_edit, stretch=1)
+        self.browse_btn = QPushButton("\U0001F4C2"); self.browse_btn.setFixedSize(28,24)
+        self.browse_btn.setStyleSheet("font-size:12px;padding:0;border:1px solid #2a2a3a;border-radius:4px;background:#1e1e2a;")
+        self.browse_btn.setToolTip("Browse for program")
+        self.browse_btn.clicked.connect(self._browse)
+        ly.addWidget(self.browse_btn)
+    def _browse(self):
+        p, _ = QFileDialog.getOpenFileName(self, "Select Program", "", "Executables (*.exe *.bat *.cmd *.lnk);;All Files (*)")
+        if p: self.path_edit.setText(p)
+    def text(self): return self.path_edit.text()
+    def setText(self, t): self.path_edit.setText(t)
+    def clear(self): self.path_edit.clear()
 
 # Ã¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢Â MACRO EDITOR Ã¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢Â
 
@@ -1258,6 +1388,7 @@ class GestureChainCard(QFrame):
         self.ce = QLineEdit(); self.ce.setPlaceholderText("Command..."); self.ce.hide(); ar.addWidget(self.ce)
         ly.addLayout(ar)
 
+        self.lpe = LaunchProgramEdit(); self.lpe.hide(); ly.addWidget(self.lpe)
         self.me = MacroEditor(); self.me.hide(); ly.addWidget(self.me)
 
         # Gamepad button picker
@@ -1294,7 +1425,8 @@ class GestureChainCard(QFrame):
 
     def _oa(self):
         a = self.ac.currentData()
-        self.ke.setVisible(a == 'key'); self.ce.setVisible(a == 'command'); self.me.setVisible(a == 'macro')
+        self.ke.setVisible(a == 'key'); self.ce.setVisible(a == 'command'); self.lpe.setVisible(a == 'launch_program')
+        self.me.setVisible(a == 'macro')
         self.gp_btn_cb.setVisible(a == 'gamepad_button'); self.gp_axis_frame.setVisible(a == 'gamepad_axis')
         self._toggle_note.setVisible(a == 'toggle_gestures')
 
@@ -1327,7 +1459,8 @@ class GestureChainCard(QFrame):
 
     def get_action_state(self):
         return dict(action=self.ac.currentData(), keyBind=self.ke.text(),
-                    command=self.ce.text(), macro=self.me.to_macro_string(),
+                    command=self.ce.text(), launchProgram=self.lpe.text(),
+                    macro=self.me.to_macro_string(),
                     gamepadBtn=self.gp_btn_cb.currentData() or '',
                     gamepadAxis=self.gp_axis_cb.currentData() or '',
                     gamepadInvert=self.gp_invert.isChecked())
@@ -1336,7 +1469,8 @@ class GestureChainCard(QFrame):
         return dict(gestures=self.get_gesture_sequence(),
                     timeout=self.timeout_sl.value(),
                     action=self.ac.currentData(), keyBind=self.ke.text(),
-                    command=self.ce.text(), macro=self.me.to_macro_string(),
+                    command=self.ce.text(), launchProgram=self.lpe.text(),
+                    macro=self.me.to_macro_string(),
                     gamepadBtn=self.gp_btn_cb.currentData() or '',
                     gamepadAxis=self.gp_axis_cb.currentData() or '',
                     gamepadInvert=self.gp_invert.isChecked())
@@ -1350,6 +1484,7 @@ class GestureChainCard(QFrame):
         for i in range(self.ac.count()):
             if self.ac.itemData(i) == a: self.ac.setCurrentIndex(i); break
         self.ke.setText(s.get('keyBind', '')); self.ce.setText(s.get('command', ''))
+        self.lpe.setText(s.get('launchProgram', ''))
         self.me.set_from_string(s.get('macro', ''))
         gb = s.get('gamepadBtn','')
         for i in range(self.gp_btn_cb.count()):
@@ -1505,6 +1640,7 @@ class MorsePatternRow(QFrame):
         for ax_id, ax_label, *_ in GAMEPAD_AXES: self.gp_axis_cb.addItem(ax_label, ax_id)
         self.gp_axis_cb.hide(); bot.addWidget(self.gp_axis_cb)
         outer.addLayout(bot)
+        self.lpe = LaunchProgramEdit(); self.lpe.hide(); outer.addWidget(self.lpe)
         self.me = MacroEditor(); self.me.hide(); outer.addWidget(self.me)
         # Toggle gestures note (informational for morse - they're already a good trigger)
         self._toggle_note = QLabel("✓ Morse chains are a good choice for this action.")
@@ -1515,7 +1651,8 @@ class MorsePatternRow(QFrame):
 
     def _oa(self):
         a = self.ac.currentData()
-        self.ke.setVisible(a == 'key'); self.ce.setVisible(a == 'command'); self.me.setVisible(a == 'macro')
+        self.ke.setVisible(a == 'key'); self.ce.setVisible(a == 'command'); self.lpe.setVisible(a == 'launch_program')
+        self.me.setVisible(a == 'macro')
         self.gp_btn_cb.setVisible(a == 'gamepad_button'); self.gp_axis_cb.setVisible(a == 'gamepad_axis')
         self._toggle_note.setVisible(a == 'toggle_gestures')
 
@@ -1549,13 +1686,15 @@ class MorsePatternRow(QFrame):
     def get_pattern(self): return list(self._symbols)
     def set_pattern(self, syms): self._symbols = list(syms); self._rebuild_symbols()
     def get_action_state(self):
-        return dict(action=self.ac.currentData(), keyBind=self.ke.text(), command=self.ce.text(), macro=self.me.to_macro_string(),
+        return dict(action=self.ac.currentData(), keyBind=self.ke.text(), command=self.ce.text(),
+                    launchProgram=self.lpe.text(), macro=self.me.to_macro_string(),
                     gamepadBtn=self.gp_btn_cb.currentData() or '', gamepadAxis=self.gp_axis_cb.currentData() or '')
     def set_action_state(self, s):
         a = s.get('action', 'none')
         for i in range(self.ac.count()):
             if self.ac.itemData(i) == a: self.ac.setCurrentIndex(i); break
-        self.ke.setText(s.get('keyBind', '')); self.ce.setText(s.get('command', '')); self.me.set_from_string(s.get('macro', ''))
+        self.ke.setText(s.get('keyBind', '')); self.ce.setText(s.get('command', ''))
+        self.lpe.setText(s.get('launchProgram', '')); self.me.set_from_string(s.get('macro', ''))
         gb = s.get('gamepadBtn','')
         for i in range(self.gp_btn_cb.count()):
             if self.gp_btn_cb.itemData(i)==gb: self.gp_btn_cb.setCurrentIndex(i); break
@@ -1724,6 +1863,12 @@ class GestureCard(QFrame):
         tr.addWidget(self.tmin); tr.addWidget(tol); tr.addWidget(self.tmax); bly.addLayout(tr)
         self.tmin.valueChanged.connect(self._ut); self.tmax.valueChanged.connect(self._ut)
 
+        # Dead Zone (per-gesture)
+        h3=QHBoxLayout(); h3.addWidget(self._lbl("Dead Zone")); h3.addStretch()
+        self.dzv=self._mono("3"); h3.addWidget(self.dzv); bly.addLayout(h3)
+        self.dzs=QSlider(Qt.Orientation.Horizontal); self.dzs.setRange(0,15); self.dzs.setValue(3)
+        self.dzs.valueChanged.connect(lambda v: self.dzv.setText(str(v))); bly.addWidget(self.dzs)
+
         # Live bar
         self.lb=QProgressBar(); self.lb.setRange(0,100); self.lb.setTextVisible(False); self.lb.setFixedHeight(4)
         self.lb.setStyleSheet(f"QProgressBar::chunk{{background:{self.color};border-radius:2px;}}"); bly.addWidget(self.lb)
@@ -1738,6 +1883,9 @@ class GestureCard(QFrame):
         self.ke=KeyCaptureEdit(); self.ke.hide(); ar.addWidget(self.ke)
         self.ce=QLineEdit(); self.ce.setPlaceholderText("Command..."); self.ce.hide(); ar.addWidget(self.ce)
         bly.addLayout(ar)
+
+        # Launch program file picker
+        self.lpe=LaunchProgramEdit(); self.lpe.hide(); bly.addWidget(self.lpe)
 
         # Macro editor (visible when action type is 'macro')
         self.me=MacroEditor(); self.me.hide(); bly.addWidget(self.me)
@@ -1803,6 +1951,7 @@ class GestureCard(QFrame):
         a=self.ac.currentData()
         self.ke.setVisible(a=='key')
         self.ce.setVisible(a=='command')
+        self.lpe.setVisible(a=='launch_program')
         self.me.setVisible(a=='macro')
         self.gp_btn_cb.setVisible(a=='gamepad_button')
         self.gp_axis_frame.setVisible(a=='gamepad_axis')
@@ -1820,7 +1969,9 @@ class GestureCard(QFrame):
     def get_state(self):
         return dict(enabled=self.en.isChecked(), sensitivity=self.ss.value(),
             thresholdMin=self.tmin.value(), thresholdMax=self.tmax.value(),
+            deadZone=self.dzs.value(),
             action=self.ac.currentData(), keyBind=self.ke.text(), command=self.ce.text(),
+            launchProgram=self.lpe.text(),
             macro=self.me.to_macro_string(), triggerMode=self.tm.currentData(),
             gamepadBtn=self.gp_btn_cb.currentData() or '',
             gamepadAxis=self.gp_axis_cb.currentData() or '',
@@ -1829,10 +1980,12 @@ class GestureCard(QFrame):
     def set_state(self,s):
         self.en.setChecked(s.get('enabled',True)); self.ss.setValue(s.get('sensitivity',50))
         self.tmin.setValue(s.get('thresholdMin',20)); self.tmax.setValue(s.get('thresholdMax',80))
+        self.dzs.setValue(s.get('deadZone',3))
         a=s.get('action','none')
         for i in range(self.ac.count()):
             if self.ac.itemData(i)==a: self.ac.setCurrentIndex(i); break
         self.ke.setText(s.get('keyBind','')); self.ce.setText(s.get('command',''))
+        self.lpe.setText(s.get('launchProgram',''))
         self.me.set_from_string(s.get('macro',''))
         tm=s.get('triggerMode','single')
         for i in range(self.tm.count()):
@@ -1848,11 +2001,290 @@ class GestureCard(QFrame):
         self.gp_deadzone.setValue(s.get('gamepadDeadzone',5))
     def reset_def(self):
         g=self.g; self.en.setChecked(True); self.ss.setValue(g['ds'])
-        self.tmin.setValue(g['dtmin']); self.tmax.setValue(g['dtmax'])
-        self.ac.setCurrentIndex(0); self.ke.clear(); self.ce.clear(); self.me.clear()
+        self.tmin.setValue(g['dtmin']); self.tmax.setValue(g['dtmax']); self.dzs.setValue(3)
+        self.ac.setCurrentIndex(0); self.ke.clear(); self.ce.clear(); self.lpe.clear(); self.me.clear()
         self.tm.setCurrentIndex(0)
         self.gp_btn_cb.setCurrentIndex(0); self.gp_axis_cb.setCurrentIndex(0)
         self.gp_invert.setChecked(False); self.gp_deadzone.setValue(5)
+
+
+# ••• POINT TRACKER PANEL •••
+
+class PTDirectionConfig(QFrame):
+    """Config for one direction (+/-) of a point tracker axis. Mirrors GestureCard action setup."""
+    def __init__(self, label, color, parent=None):
+        super().__init__(parent)
+        self.setStyleSheet(f"background:#12121a;border:1px solid #2a2a3a;border-radius:5px;")
+        ly = QVBoxLayout(self); ly.setContentsMargins(6,4,6,4); ly.setSpacing(3)
+
+        hdr = QHBoxLayout(); hdr.setSpacing(4)
+        dl = QLabel(label); dl.setStyleSheet(f"font-weight:600;font-size:10px;color:{color};border:none;")
+        hdr.addWidget(dl); hdr.addStretch()
+        self.en = QCheckBox(); self.en.setChecked(True); hdr.addWidget(self.en)
+        ly.addLayout(hdr)
+
+        # Threshold
+        th_row = QHBoxLayout(); th_row.setSpacing(4)
+        thl = QLabel("Thresh"); thl.setStyleSheet("font-size:9px;color:#8888a0;border:none;"); th_row.addWidget(thl)
+        self.tmin = QSlider(Qt.Orientation.Horizontal); self.tmin.setRange(0,100); self.tmin.setValue(20)
+        self.tmin.setStyleSheet(f"QSlider::handle:horizontal{{background:{color};border:1px solid #16161f;width:10px;height:10px;}}")
+        th_row.addWidget(self.tmin, stretch=1)
+        self.tv = QLabel("20"); self.tv.setStyleSheet(f"font-family:Consolas;font-size:9px;color:{color};min-width:18px;border:none;")
+        self.tv.setAlignment(Qt.AlignmentFlag.AlignRight|Qt.AlignmentFlag.AlignVCenter)
+        self.tmin.valueChanged.connect(lambda v: self.tv.setText(str(v)))
+        th_row.addWidget(self.tv); ly.addLayout(th_row)
+
+        # Action type
+        self.ac = QComboBox(); self.ac.setFixedHeight(22); self.ac.setMaxVisibleItems(25)
+        self.ac.setStyleSheet("font-size:10px;")
+        for v, l in ACTION_TYPES: self.ac.addItem(l, v)
+        self.ac.currentIndexChanged.connect(self._oa); ly.addWidget(self.ac)
+
+        self.ke = KeyCaptureEdit(); self.ke.setFixedHeight(22); self.ke.hide(); ly.addWidget(self.ke)
+        self.ce = QLineEdit(); self.ce.setPlaceholderText("Command..."); self.ce.setFixedHeight(22); self.ce.hide(); ly.addWidget(self.ce)
+        self.lpe = LaunchProgramEdit(); self.lpe.hide(); ly.addWidget(self.lpe)
+        self.me = MacroEditor(); self.me.hide(); ly.addWidget(self.me)
+
+        self.gp_btn_cb = QComboBox(); self.gp_btn_cb.setFixedHeight(22); self.gp_btn_cb.setMaxVisibleItems(25)
+        self.gp_btn_cb.setStyleSheet("font-size:10px;")
+        for btn_id, btn_label in GAMEPAD_BUTTONS: self.gp_btn_cb.addItem(btn_label, btn_id)
+        self.gp_btn_cb.hide(); ly.addWidget(self.gp_btn_cb)
+
+        # Gamepad axis picker + options
+        self.gp_axis_frame = QFrame()
+        self.gp_axis_frame.setStyleSheet("border:none;")
+        gp_ax_ly = QVBoxLayout(self.gp_axis_frame); gp_ax_ly.setContentsMargins(0,0,0,0); gp_ax_ly.setSpacing(2)
+        self.gp_axis_cb = QComboBox(); self.gp_axis_cb.setFixedHeight(22); self.gp_axis_cb.setMaxVisibleItems(25)
+        self.gp_axis_cb.setStyleSheet("font-size:10px;")
+        for ax_id, ax_label, *_ in GAMEPAD_AXES: self.gp_axis_cb.addItem(ax_label, ax_id)
+        gp_ax_ly.addWidget(self.gp_axis_cb)
+        self.gp_axis_frame.hide(); ly.addWidget(self.gp_axis_frame)
+
+        # Trigger mode
+        tm_row = QHBoxLayout(); tm_row.setSpacing(4)
+        tml = QLabel("Mode"); tml.setStyleSheet("font-size:9px;color:#8888a0;border:none;"); tm_row.addWidget(tml)
+        self.tm = QComboBox(); self.tm.setFixedHeight(22); self.tm.setMaxVisibleItems(25)
+        self.tm.setStyleSheet("font-size:10px;")
+        for v, l in TRIGGER_MODES: self.tm.addItem(l, v)
+        tm_row.addWidget(self.tm, stretch=1); ly.addLayout(tm_row)
+
+        # Live bar
+        self.live_bar = QProgressBar(); self.live_bar.setRange(0,100); self.live_bar.setValue(0)
+        self.live_bar.setTextVisible(False); self.live_bar.setFixedHeight(3)
+        self.live_bar.setStyleSheet(f"QProgressBar::chunk{{background:{color};border-radius:1px;}}")
+        ly.addWidget(self.live_bar)
+
+    def _oa(self):
+        a = self.ac.currentData()
+        self.ke.setVisible(a == 'key')
+        self.ce.setVisible(a == 'command')
+        self.lpe.setVisible(a == 'launch_program')
+        self.me.setVisible(a == 'macro')
+        self.gp_btn_cb.setVisible(a == 'gamepad_button')
+        self.gp_axis_frame.setVisible(a == 'gamepad_axis')
+        if a == 'gamepad_axis':
+            for i in range(self.tm.count()):
+                if self.tm.itemData(i) == 'analog': self.tm.setCurrentIndex(i); break
+
+    def get_state(self):
+        return dict(enabled=self.en.isChecked(), threshold=self.tmin.value(),
+            action=self.ac.currentData(), keyBind=self.ke.text(), command=self.ce.text(),
+            launchProgram=self.lpe.text(),
+            macro=self.me.to_macro_string(), triggerMode=self.tm.currentData(),
+            gamepadBtn=self.gp_btn_cb.currentData() or '',
+            gamepadAxis=self.gp_axis_cb.currentData() or '')
+
+    def set_state(self, s):
+        self.en.setChecked(s.get('enabled', True))
+        self.tmin.setValue(s.get('threshold', 20))
+        a = s.get('action', 'none')
+        for i in range(self.ac.count()):
+            if self.ac.itemData(i) == a: self.ac.setCurrentIndex(i); break
+        self.ke.setText(s.get('keyBind', '')); self.ce.setText(s.get('command', ''))
+        self.lpe.setText(s.get('launchProgram', ''))
+        self.me.set_from_string(s.get('macro', ''))
+        tm = s.get('triggerMode', 'single')
+        for i in range(self.tm.count()):
+            if self.tm.itemData(i) == tm: self.tm.setCurrentIndex(i); break
+        gb = s.get('gamepadBtn', '')
+        for i in range(self.gp_btn_cb.count()):
+            if self.gp_btn_cb.itemData(i) == gb: self.gp_btn_cb.setCurrentIndex(i); break
+        ga = s.get('gamepadAxis', '')
+        for i in range(self.gp_axis_cb.count()):
+            if self.gp_axis_cb.itemData(i) == ga: self.gp_axis_cb.setCurrentIndex(i); break
+
+    def set_live(self, val):
+        self.live_bar.setValue(max(0, min(100, int(val))))
+
+
+class PointTrackerAxisConfig(QFrame):
+    """Config for one axis (X or Y) of the point tracker output.
+    Contains range, dead zone, invert, and two direction configs (+ and -)."""
+    def __init__(self, axis_label, color, parent=None):
+        super().__init__(parent)
+        self._color = color
+        self.setStyleSheet("background:#1a1a26;border:1px solid #2a2a3a;border-radius:6px;")
+        self.setSizePolicy(QSizePolicy.Policy.Preferred, QSizePolicy.Policy.Maximum)
+        ly = QVBoxLayout(self); ly.setContentsMargins(8,6,8,6); ly.setSpacing(4)
+
+        hdr = QHBoxLayout(); hdr.setSpacing(6)
+        ic = QLabel(axis_label); ic.setFixedSize(24,24); ic.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        ic.setStyleSheet(f"background:{color}33;border-radius:4px;font-size:11px;font-weight:600;color:{color};border:none;")
+        hdr.addWidget(ic)
+        tl = QLabel(f"{axis_label} Axis"); tl.setStyleSheet(f"font-weight:600;font-size:12px;color:{color};border:none;")
+        hdr.addWidget(tl); hdr.addStretch()
+        self.en = QCheckBox(); self.en.setChecked(True); hdr.addWidget(self.en)
+        ly.addLayout(hdr)
+
+        # Range slider (per-axis)
+        rng_row = QHBoxLayout(); rng_row.setSpacing(4)
+        rnl = QLabel("Range"); rnl.setStyleSheet("font-size:10px;color:#8888a0;border:none;"); rng_row.addWidget(rnl)
+        self.rng_sl = QSlider(Qt.Orientation.Horizontal); self.rng_sl.setRange(10,200); self.rng_sl.setValue(60)
+        self.rng_sl.setStyleSheet(f"QSlider::handle:horizontal{{background:{color};border:2px solid #16161f;}}")
+        rng_row.addWidget(self.rng_sl, stretch=1)
+        self.rng_val = QLabel("60"); self.rng_val.setStyleSheet(f"font-family:Consolas;font-size:10px;color:{color};min-width:22px;border:none;")
+        self.rng_val.setAlignment(Qt.AlignmentFlag.AlignRight|Qt.AlignmentFlag.AlignVCenter)
+        self.rng_sl.valueChanged.connect(lambda v: self.rng_val.setText(str(v)))
+        rng_row.addWidget(self.rng_val); ly.addLayout(rng_row)
+
+        # Dead Zone slider (per-axis)
+        dz_row = QHBoxLayout(); dz_row.setSpacing(4)
+        dzl = QLabel("D.Zone"); dzl.setStyleSheet("font-size:10px;color:#8888a0;border:none;"); dz_row.addWidget(dzl)
+        self.dz_sl = QSlider(Qt.Orientation.Horizontal); self.dz_sl.setRange(0,30); self.dz_sl.setValue(5)
+        self.dz_sl.setStyleSheet(f"QSlider::handle:horizontal{{background:{color};border:2px solid #16161f;}}")
+        dz_row.addWidget(self.dz_sl, stretch=1)
+        self.dz_val = QLabel("5%"); self.dz_val.setStyleSheet(f"font-family:Consolas;font-size:10px;color:{color};min-width:22px;border:none;")
+        self.dz_val.setAlignment(Qt.AlignmentFlag.AlignRight|Qt.AlignmentFlag.AlignVCenter)
+        self.dz_sl.valueChanged.connect(lambda v: self.dz_val.setText(f"{v}%"))
+        dz_row.addWidget(self.dz_val); ly.addLayout(dz_row)
+
+        # Invert checkbox
+        self.invert = QCheckBox("Invert"); self.invert.setStyleSheet("font-size:10px;color:#8888a0;border:none;")
+        ly.addWidget(self.invert)
+
+        # Live value display
+        self.live_val = QLabel("+0.00"); self.live_val.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        self.live_val.setStyleSheet(f"font-family:Consolas;font-size:10px;color:{color};border:none;")
+        ly.addWidget(self.live_val)
+
+        sep = QFrame(); sep.setFrameShape(QFrame.Shape.HLine); sep.setStyleSheet("color:#2a2a3a;"); ly.addWidget(sep)
+
+        # Positive direction config
+        pos_label = f"{axis_label}+" if axis_label == 'X' else f"{axis_label}+"
+        neg_label = f"{axis_label}\u2212" if True else f"{axis_label}-"
+        pos_sub = "Right" if axis_label == 'X' else "Down"
+        neg_sub = "Left" if axis_label == 'X' else "Up"
+        self.pos = PTDirectionConfig(f"{pos_label} ({pos_sub})", color)
+        self.neg = PTDirectionConfig(f"{neg_label} ({neg_sub})", color)
+        ly.addWidget(self.pos)
+        ly.addWidget(self.neg)
+
+    def get_state(self):
+        return dict(enabled=self.en.isChecked(), range_px=self.rng_sl.value(),
+            dead_zone=self.dz_sl.value(), invert=self.invert.isChecked(),
+            pos=self.pos.get_state(), neg=self.neg.get_state())
+
+    def set_state(self, s):
+        self.en.setChecked(s.get('enabled', True))
+        self.rng_sl.setValue(s.get('range_px', 60))
+        self.dz_sl.setValue(s.get('dead_zone', 5))
+        self.invert.setChecked(s.get('invert', False))
+        if 'pos' in s: self.pos.set_state(s['pos'])
+        if 'neg' in s: self.neg.set_state(s['neg'])
+
+    def set_live(self, val):
+        """val: -1.0 to 1.0"""
+        self.live_val.setText(f"{val:+.2f}")
+        # Update per-direction live bars (0-100 scale)
+        self.pos.set_live(max(0, val) * 100)
+        self.neg.set_live(max(0, -val) * 100)
+
+
+class PointTrackerPanel(QFrame):
+    """UI panel for the point tracker feature."""
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self.setStyleSheet("background:#16161f;border:1px solid #00ccaa55;border-radius:10px;")
+        ly = QVBoxLayout(self); ly.setContentsMargins(12,12,12,12); ly.setSpacing(6)
+
+        # Header
+        top = QHBoxLayout()
+        ic = QLabel("\U0001F3AF"); ic.setFixedSize(30,30); ic.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        ic.setStyleSheet("background:#00ccaa33;border-radius:6px;font-size:15px;border:none;")
+        top.addWidget(ic)
+        nb = QVBoxLayout(); nb.setSpacing(0)
+        title = QLabel("Point Tracker"); title.setStyleSheet("font-weight:600;font-size:13px;color:#00ccaa;border:none;")
+        sub = QLabel("Click camera feed to track a point \u2022 Raw X/Y output")
+        sub.setStyleSheet("color:#555570;font-size:11px;border:none;")
+        nb.addWidget(title); nb.addWidget(sub); top.addLayout(nb); top.addStretch()
+        self.en = QCheckBox(); self.en.setChecked(False)
+        self.en.setToolTip("Enable/disable point tracker"); top.addWidget(self.en)
+        ly.addLayout(top)
+
+        # Collapsible body
+        self._body = QWidget()
+        self._body.setObjectName("ptBody")
+        self._body.setStyleSheet("#ptBody{background:transparent;border:none;}")
+        bly = QVBoxLayout(self._body); bly.setContentsMargins(0,0,0,0); bly.setSpacing(6)
+
+        # Status
+        self.status_lbl = QLabel("Click on the camera feed to set a tracking point")
+        self.status_lbl.setStyleSheet("font-size:10px;color:#555570;font-style:italic;border:none;padding:2px 0;")
+        bly.addWidget(self.status_lbl)
+
+        # ROI Size slider
+        roi_row = QHBoxLayout(); roi_row.setSpacing(6)
+        rl = QLabel("ROI Size"); rl.setStyleSheet("font-size:11px;border:none;"); roi_row.addWidget(rl); roi_row.addStretch()
+        self.roi_val = QLabel("31"); self.roi_val.setStyleSheet("font-family:Consolas;font-size:11px;color:#00ccaa;border:none;")
+        roi_row.addWidget(self.roi_val); bly.addLayout(roi_row)
+        self.roi_sl = QSlider(Qt.Orientation.Horizontal); self.roi_sl.setRange(10,80); self.roi_sl.setValue(31)
+        self.roi_sl.setStyleSheet("QSlider::handle:horizontal{background:#00ccaa;border:2px solid #16161f;}")
+        self.roi_sl.valueChanged.connect(lambda v: self.roi_val.setText(str(v)))
+        bly.addWidget(self.roi_sl)
+
+        # Clear point button
+        btn_row = QHBoxLayout()
+        self.clear_btn = QPushButton("\u2715 Clear Point"); self.clear_btn.setFixedHeight(24)
+        self.clear_btn.setStyleSheet("font-size:10px;padding:2px 10px;border:1px solid #ff446655;color:#ff4466;border-radius:4px;background:transparent;")
+        btn_row.addWidget(self.clear_btn); btn_row.addStretch()
+        self.recenter_btn = QPushButton("\u25CE Re-center"); self.recenter_btn.setFixedHeight(24)
+        self.recenter_btn.setStyleSheet("font-size:10px;padding:2px 10px;border:1px solid #00ccaa55;color:#00ccaa;border-radius:4px;background:transparent;")
+        btn_row.addWidget(self.recenter_btn)
+        bly.addLayout(btn_row)
+
+        sep = QFrame(); sep.setFrameShape(QFrame.Shape.HLine); sep.setStyleSheet("color:#2a2a3a;"); bly.addWidget(sep)
+
+        # X and Y axis configs side by side
+        axes_row = QHBoxLayout(); axes_row.setSpacing(8); axes_row.setAlignment(Qt.AlignmentFlag.AlignTop)
+        self.x_axis = PointTrackerAxisConfig("X", "#ff8844")
+        self.y_axis = PointTrackerAxisConfig("Y", "#44aaff")
+        axes_row.addWidget(self.x_axis, stretch=1, alignment=Qt.AlignmentFlag.AlignTop)
+        axes_row.addWidget(self.y_axis, stretch=1, alignment=Qt.AlignmentFlag.AlignTop)
+        bly.addLayout(axes_row)
+
+        ly.addWidget(self._body)
+
+        # Connect checkbox to collapse/expand
+        self.en.toggled.connect(self._toggle_body)
+        self._toggle_body(self.en.isChecked())
+
+    def _toggle_body(self, checked):
+        self._body.setVisible(checked)
+        if checked:
+            self.setStyleSheet("background:#16161f;border:1px solid #00ccaa55;border-radius:10px;")
+        else:
+            self.setStyleSheet("background:#16161f;border:1px solid #1a1a24;border-radius:10px;")
+
+    def get_state(self):
+        return dict(enabled=self.en.isChecked(), roi_size=self.roi_sl.value(),
+            x_axis=self.x_axis.get_state(), y_axis=self.y_axis.get_state())
+
+    def set_state(self, s):
+        self.en.setChecked(s.get('enabled', False))
+        self.roi_sl.setValue(s.get('roi_size', 31))
+        if 'x_axis' in s: self.x_axis.set_state(s['x_axis'])
+        if 'y_axis' in s: self.y_axis.set_state(s['y_axis'])
+
 
 # ÃƒÂ¢Ã¢â‚¬Â¢Ã‚ÂÃƒÂ¢Ã¢â‚¬Â¢Ã‚ÂÃƒÂ¢Ã¢â‚¬Â¢Ã‚Â MAIN WINDOW ÃƒÂ¢Ã¢â‚¬Â¢Ã‚ÂÃƒÂ¢Ã¢â‚¬Â¢Ã‚ÂÃƒÂ¢Ã¢â‚¬Â¢Ã‚Â
 
@@ -1880,6 +2312,19 @@ class MainWindow(QMainWindow):
         self.chain_counter = 0    # for unique chain IDs
         self.chain_state = {}     # chain_id -> {step:int, last_time:float, prev_active:set}
         self._auto_profile = os.path.join(os.path.dirname(os.path.abspath(__file__)), '.facecommand_last_profile.json')
+        # Point tracker
+        self.pt = PointTracker()
+        self._pt_last_frame = None  # store raw (un-flipped) frame for point tracker
+        self._pt_pick_mode = False  # True when waiting for user to click on feed
+        self._pt_crop = (0.0, 0.0, 1.0, 1.0, 1, 1)  # crop params for click mapping
+        # Per-direction state: keyed by 'x_pos','x_neg','y_pos','y_neg'
+        self._pt_dirs = ['x_pos','x_neg','y_pos','y_neg']
+        self._pt_hs = {d:0.0 for d in self._pt_dirs}      # hold start time
+        self._pt_ta = {d:False for d in self._pt_dirs}     # triggered active
+        self._pt_lt = {d:0.0 for d in self._pt_dirs}       # last trigger time
+        self._pt_hold = {d:False for d in self._pt_dirs}    # hold mode active
+        self._pt_tog_state = {d:False for d in self._pt_dirs}  # toggle state
+        self._pt_rpt = {d:0.0 for d in self._pt_dirs}      # last repeat time
         self._build()
         self._auto_load()
 
@@ -1908,8 +2353,8 @@ class MainWindow(QMainWindow):
         self.rescan_btn.setToolTip("Rescan cameras")
         self.rescan_btn.clicked.connect(self._rescan_cameras)
         hl.addWidget(self.rescan_btn)
-        self._available_cams = []
-        threading.Thread(target=self._scan_cameras, daemon=True).start()
+        self._available_cams = enumerate_cameras()
+        self._populate_cameras()
         self.rcb=QPushButton("\u27F3 Recalibrate"); self.rcb.setMinimumWidth(100); self.rcb.clicked.connect(self._recal); self.rcb.hide(); hl.addWidget(self.rcb)
         self.cb=QPushButton("\u25B6 Start Camera"); self.cb.setMinimumWidth(140); self.cb.clicked.connect(self._tc); hl.addWidget(self.cb)
         self._set_btn_primary()
@@ -1941,6 +2386,9 @@ class MainWindow(QMainWindow):
             if event: type(cam_container).resizeEvent(cam_container, event)
         cam_container.resizeEvent = _reposition_toggle_btn
         self._toggle_gestures_btn.move(320 - 36, 4)
+        # Enable mouse clicks on camera feed for point tracker
+        self.vl.mousePressEvent = self._on_cam_click
+        self.vl.setCursor(Qt.CursorShape.CrossCursor)
         ll.addWidget(cam_container)
 
         # Zoom & Pan controls
@@ -2143,6 +2591,14 @@ class MainWindow(QMainWindow):
         self.no_chains_lbl.setAlignment(Qt.AlignmentFlag.AlignCenter)
         rl.addWidget(self.no_chains_lbl)
 
+        # Point Tracker section
+        rl.addWidget(self._sec("POINT TRACKER"))
+        self.pt_panel = PointTrackerPanel()
+        self.pt_panel.clear_btn.clicked.connect(self._pt_clear)
+        self.pt_panel.recenter_btn.clicked.connect(self._pt_recenter)
+        self.pt_panel.en.toggled.connect(self._pt_toggle)
+        rl.addWidget(self.pt_panel)
+
         rl.addWidget(self._sec("EXPRESSION GESTURES"))
         grid=QGridLayout(); grid.setSpacing(10)
         # Explicit grid positions: paired gestures share a row, left=col0, right=col1
@@ -2175,7 +2631,6 @@ class MainWindow(QMainWindow):
         self.sms = self._gslider(gcl,"Smoothing",1,30,12)
         self.cds = self._gslider(gcl,"Cooldown (ms)",50,1500,650,50)
         self.hds = self._gslider(gcl,"Hold Time (ms)",5,500,200,25)
-        self.dzs = self._gslider(gcl,"Dead Zone",0,15,3)
         self.pcs = self._gslider(gcl,"Tilt Compensation",0,100,35)
         rl.addWidget(gc); rl.addStretch()
         rsc.setWidget(rwid); sp.addWidget(rsc); sp.setSizes([320,880]); root.addWidget(sp,stretch=1)
@@ -2280,9 +2735,8 @@ class MainWindow(QMainWindow):
         for prop_name, (sl, _) in self._cam_sliders.items():
             sl.setValue(s.get(prop_name, defaults.get(prop_name, 128)))
     def _scan_cameras(self):
-        """Scan for available cameras in background thread."""
-        cams = enumerate_cameras()
-        self._available_cams = cams
+        """Populate camera list without probing devices."""
+        self._available_cams = enumerate_cameras()
         from PyQt6.QtCore import QMetaObject
         QMetaObject.invokeMethod(self, "_populate_cameras", Qt.ConnectionType.QueuedConnection)
 
@@ -2296,9 +2750,8 @@ class MainWindow(QMainWindow):
                 self.cam_cb.addItem(f"\U0001F4F7 {name}", (idx, backend))
 
     def _rescan_cameras(self):
-        self.cam_cb.clear()
-        self.cam_cb.addItem("Scanning cameras...", None)
-        threading.Thread(target=self._scan_cameras, daemon=True).start()
+        self._available_cams = enumerate_cameras()
+        self._populate_cameras()
 
     def _start(self):
         cam_data = self.cam_cb.currentData()
@@ -2312,6 +2765,10 @@ class MainWindow(QMainWindow):
         self.chain_state={}; self._mc_hs={}; self._mc_buf={}; self._mc_last={}; self._mc_active={}
         self._chain_hs={g['id']:0.0 for g in GESTURES}
         self._chain_ta={g['id']:False for g in GESTURES}; self._chain_newly=set()
+        # Reset point tracker direction states
+        for d in self._pt_dirs:
+            self._pt_hs[d]=0.0; self._pt_ta[d]=False; self._pt_lt[d]=0.0
+            self._pt_hold[d]=False; self._pt_tog_state[d]=False; self._pt_rpt[d]=0.0
         # Restore gestures if they were toggled off
         if self._gestures_disabled:
             for gid, was_enabled in self._saved_gesture_states.items():
@@ -2353,6 +2810,9 @@ class MainWindow(QMainWindow):
         self.cb.setText("\u25B6 Start Camera"); self._set_btn_primary(); self.rcb.hide()
         self._ss("Camera Off","#ff4466"); self.vl.clear(); self.vl.setText("\U0001F4F7  Start Camera"); self.fl.setText("-- fps")
         self._update_gp_status()
+        # Clear point tracker state (not config)
+        self._pt_clear()
+        self._pt_last_frame = None
     def _recal(self):
         self._release_all_holds()
         self.chain_state={}
@@ -2370,9 +2830,180 @@ class MainWindow(QMainWindow):
         gp = VirtualGamepad.get() if VirtualGamepad.connected() else None
         if gp: gp.reset_all()
 
+    # ••• Point Tracker Methods •••
+    def _on_cam_click(self, event):
+        """Handle click on the camera feed to set a point tracker target."""
+        if not self.pt_panel.en.isChecked():
+            return
+        if self._pt_last_frame is None:
+            return
+        pixmap = self.vl.pixmap()
+        if pixmap is None or pixmap.isNull():
+            return
+        # Get click position in label coords
+        cx = event.position().x() if hasattr(event, 'position') else event.x()
+        cy = event.position().y() if hasattr(event, 'position') else event.y()
+        # The pixmap is scaled to fit the label preserving aspect ratio
+        lw, lh = self.vl.width(), self.vl.height()
+        pw, ph = pixmap.width(), pixmap.height()
+        # Compute letterbox offset
+        scale = min(lw / pw, lh / ph)
+        disp_w, disp_h = pw * scale, ph * scale
+        off_x = (lw - disp_w) / 2.0
+        off_y = (lh - disp_h) / 2.0
+        # Convert click to 0..1 within the displayed image
+        norm_x = (cx - off_x) / disp_w
+        norm_y = (cy - off_y) / disp_h
+        if norm_x < 0 or norm_y < 0 or norm_x > 1 or norm_y > 1:
+            return
+        # The displayed image has zoom/pan crop applied.
+        # norm_x/y is position within the cropped view.
+        # Map back to full frame coordinates using stored crop params.
+        crop_x0, crop_y0, crop_w, crop_h, fw, fh = getattr(self, '_pt_crop', (0, 0, 1, 1, 1, 1))
+        # Position in normalized full-frame coords
+        frame_norm_x = crop_x0 + norm_x * crop_w
+        frame_norm_y = crop_y0 + norm_y * crop_h
+        # Convert to pixel coords in the actual frame
+        fx = frame_norm_x * fw
+        fy = frame_norm_y * fh
+        # Clamp to frame bounds
+        fx = max(0, min(fw - 1, int(fx)))
+        fy = max(0, min(fh - 1, int(fy)))
+        # Set the point on the raw frame
+        self.pt.roi_size = self.pt_panel.roi_sl.value()
+        self.pt.set_point(self._pt_last_frame, fx, fy)
+        self.pt_panel.status_lbl.setText(f"Tracking point at ({fx}, {fy})")
+        self.pt_panel.status_lbl.setStyleSheet("font-size:10px;color:#00ccaa;font-style:normal;font-weight:600;border:none;padding:2px 0;")
+
+    def _pt_clear(self):
+        """Clear the point tracker."""
+        self._pt_release_holds()
+        self.pt.clear()
+        self.pt_panel.status_lbl.setText("Click on the camera feed to set a tracking point")
+        self.pt_panel.status_lbl.setStyleSheet("font-size:10px;color:#555570;font-style:italic;border:none;padding:2px 0;")
+        self.pt_panel.x_axis.set_live(0.0)
+        self.pt_panel.y_axis.set_live(0.0)
+
+    def _pt_recenter(self):
+        """Re-center the point tracker origin to its current position."""
+        if self.pt.active and self.pt.current:
+            self.pt._origin = self.pt._current
+            self.pt._x_filter.reset()
+            self.pt._y_filter.reset()
+            self.pt_panel.status_lbl.setText(f"Re-centered at ({self.pt.current[0]}, {self.pt.current[1]})")
+
+    def _pt_toggle(self, enabled):
+        """Toggle point tracker on/off."""
+        if not enabled:
+            self.pt_panel.x_axis.set_live(0.0)
+            self.pt_panel.y_axis.set_live(0.0)
+            self._pt_release_holds()
+
+    def _pt_get_dir_cfg(self, dir_key):
+        """Get the PTDirectionConfig widget for a direction key."""
+        if dir_key == 'x_pos': return self.pt_panel.x_axis.pos
+        elif dir_key == 'x_neg': return self.pt_panel.x_axis.neg
+        elif dir_key == 'y_pos': return self.pt_panel.y_axis.pos
+        elif dir_key == 'y_neg': return self.pt_panel.y_axis.neg
+        return None
+
+    def _pt_release_holds(self):
+        """Release any held keys/buttons from point tracker directions."""
+        for d in self._pt_dirs:
+            if self._pt_hold[d] or self._pt_tog_state[d]:
+                cfg = self._pt_get_dir_cfg(d)
+                if cfg:
+                    s = cfg.get_state()
+                    execute_hold_stop(s['action'], s['keyBind'], s.get('gamepadBtn',''))
+                self._pt_hold[d] = False
+                self._pt_tog_state[d] = False
+            self._pt_ta[d] = False
+            self._pt_hs[d] = 0.0
+
+    def _pt_process_direction(self, dir_key, val_0_100, now_ms):
+        """Process a single point tracker direction like a gesture card.
+        val_0_100: 0-100 magnitude in this direction."""
+        cfg = self._pt_get_dir_cfg(dir_key)
+        if cfg is None: return
+        s = cfg.get_state()
+        if not s['enabled']:
+            if self._pt_hold[dir_key]:
+                execute_hold_stop(s['action'], s['keyBind'], s.get('gamepadBtn',''))
+                self._pt_hold[dir_key] = False
+            return
+
+        val = val_0_100
+        th = s['threshold']
+        mode = s.get('triggerMode', 'single')
+        act = s['action']; kb = s['keyBind']; macro = s.get('macro','')
+        cmd = s.get('launchProgram','') if act == 'launch_program' else s['command']
+        gp_btn = s.get('gamepadBtn',''); gp_axis = s.get('gamepadAxis','')
+        cd = self.cds.value(); ht = self.hds.value()
+        REPEAT_INTERVAL = 150
+
+        # Analog mode: continuous per-frame axis output
+        if mode == 'analog' and act == 'gamepad_axis' and gp_axis:
+            clamped = max(0.0, min(1.0, val / 100.0))
+            execute_gamepad_axis(gp_axis, clamped)
+            return
+
+        if val >= th:
+            if self._pt_hs[dir_key] == 0: self._pt_hs[dir_key] = now_ms
+            held = now_ms - self._pt_hs[dir_key]
+
+            if mode == 'single':
+                if held >= ht and not self._pt_ta[dir_key] and now_ms - self._pt_lt[dir_key] > cd:
+                    self._pt_ta[dir_key] = True; self._pt_lt[dir_key] = now_ms
+                    self.dc += 1; self.dl.setText(f"Detections: {self.dc}")
+                    threading.Thread(target=execute_action, args=(act, kb, cmd, macro, gp_btn), daemon=True).start()
+                    self._logit(f"\U0001F3AF PT:{dir_key}", act, kb, macro)
+
+            elif mode == 'hold':
+                if held >= ht and not self._pt_hold[dir_key]:
+                    self._pt_hold[dir_key] = True; self._pt_ta[dir_key] = True
+                    self.dc += 1; self.dl.setText(f"Detections: {self.dc}")
+                    if act in _HOLDABLE_ACTIONS:
+                        threading.Thread(target=execute_hold_start, args=(act, kb, gp_btn), daemon=True).start()
+                    elif act in _REPEATABLE_ACTIONS or act == 'command':
+                        threading.Thread(target=execute_action, args=(act, kb, cmd, macro, gp_btn), daemon=True).start()
+                        self._pt_rpt[dir_key] = now_ms
+                    else:
+                        threading.Thread(target=execute_action, args=(act, kb, cmd, macro, gp_btn), daemon=True).start()
+                    self._logit(f"\U0001F3AF PT:{dir_key}", act, kb, macro, mode_tag='HOLD')
+                elif self._pt_hold[dir_key] and act in _REPEATABLE_ACTIONS:
+                    if now_ms - self._pt_rpt.get(dir_key, 0) >= REPEAT_INTERVAL:
+                        threading.Thread(target=execute_action, args=(act, kb, cmd, macro, gp_btn), daemon=True).start()
+                        self._pt_rpt[dir_key] = now_ms
+
+            elif mode == 'toggle':
+                if held >= ht and not self._pt_ta[dir_key] and now_ms - self._pt_lt[dir_key] > cd:
+                    self._pt_ta[dir_key] = True; self._pt_lt[dir_key] = now_ms
+                    self.dc += 1; self.dl.setText(f"Detections: {self.dc}")
+                    if not self._pt_tog_state[dir_key]:
+                        self._pt_tog_state[dir_key] = True
+                        if act in _HOLDABLE_ACTIONS:
+                            threading.Thread(target=execute_hold_start, args=(act, kb, gp_btn), daemon=True).start()
+                        else:
+                            threading.Thread(target=execute_action, args=(act, kb, cmd, macro, gp_btn), daemon=True).start()
+                        self._logit(f"\U0001F3AF PT:{dir_key}", act, kb, macro, mode_tag='TOG ON')
+                    else:
+                        self._pt_tog_state[dir_key] = False
+                        if act in _HOLDABLE_ACTIONS:
+                            threading.Thread(target=execute_hold_stop, args=(act, kb, gp_btn), daemon=True).start()
+                        self._logit(f"\U0001F3AF PT:{dir_key}", act, kb, macro, mode_tag='TOG OFF')
+        else:
+            if mode == 'hold' and self._pt_hold[dir_key]:
+                if act in _HOLDABLE_ACTIONS:
+                    threading.Thread(target=execute_hold_stop, args=(act, kb, gp_btn), daemon=True).start()
+                self._pt_hold[dir_key] = False
+            self._pt_ta[dir_key] = False
+            self._pt_hs[dir_key] = 0
+
     @pyqtSlot(object, object, float)
     def _of(self, frame, lm, fps):
         self.fl.setText(f"{fps:.0f} fps")
+        # Store raw frame for point tracker (before any overlays)
+        self._pt_last_frame = frame.copy()
         d = frame.copy()
         h, w = d.shape[:2]
 
@@ -2384,6 +3015,9 @@ class MainWindow(QMainWindow):
         max_off_x = (1.0 - crop_w) / 2.0; max_off_y = (1.0 - crop_h) / 2.0
         cx = 0.5 + pan_x * max_off_x; cy = 0.5 + pan_y * max_off_y
         crop_x0 = cx - crop_w / 2.0; crop_y0 = cy - crop_h / 2.0
+
+        # Store crop params for click mapping
+        self._pt_crop = (crop_x0, crop_y0, crop_w, crop_h, w, h)
 
         if zoom > 1.0:
             px0 = max(0, min(int(crop_x0 * w), w-1)); py0 = max(0, min(int(crop_y0 * h), h-1))
@@ -2406,6 +3040,32 @@ class MainWindow(QMainWindow):
                         sx = (lm[i].x - crop_x0) / crop_w; sy = (lm[i].y - crop_y0) / crop_h
                         if 0 <= sx <= 1 and 0 <= sy <= 1:
                             cv2.circle(d,(int(sx*dw),int(sy*dh)),3,clr,-1)
+        # Point tracker overlay
+        if self.pt.active and self.pt_panel.en.isChecked():
+            dh, dw = d.shape[:2]
+            ox, oy = self.pt.origin
+            cx, cy = self.pt.current
+            r = self.pt.roi_size
+            # Draw origin crosshair (dimmed)
+            osx = (ox / frame.shape[1] - crop_x0) / crop_w
+            osy = (oy / frame.shape[0] - crop_y0) / crop_h
+            if 0 <= osx <= 1 and 0 <= osy <= 1:
+                opx, opy = int(osx * dw), int(osy * dh)
+                cv2.drawMarker(d, (opx, opy), (0, 204, 170), cv2.MARKER_CROSS, 12, 1)
+            # Draw current tracked position (bright box)
+            csx = (cx / frame.shape[1] - crop_x0) / crop_w
+            csy = (cy / frame.shape[0] - crop_y0) / crop_h
+            if 0 <= csx <= 1 and 0 <= csy <= 1:
+                cpx, cpy = int(csx * dw), int(csy * dh)
+                # ROI box scaled to display
+                rsx = int(r / frame.shape[1] * dw / crop_w)
+                rsy = int(r / frame.shape[0] * dh / crop_h)
+                cv2.rectangle(d, (cpx - rsx, cpy - rsy), (cpx + rsx, cpy + rsy), (0, 204, 170), 2)
+                cv2.circle(d, (cpx, cpy), 3, (0, 255, 200), -1)
+                # Draw line from origin to current
+                if 0 <= osx <= 1 and 0 <= osy <= 1:
+                    cv2.line(d, (opx, opy), (cpx, cpy), (0, 204, 170), 1)
+
         rgb = cv2.cvtColor(d, cv2.COLOR_BGR2RGB)
         qi = QImage(rgb.data,rgb.shape[1],rgb.shape[0],rgb.strides[0],QImage.Format.Format_RGB888)
         self.vl.setPixmap(QPixmap.fromImage(qi).scaled(self.vl.size(),Qt.AspectRatioMode.KeepAspectRatio,Qt.TransformationMode.SmoothTransformation))
@@ -2420,10 +3080,10 @@ class MainWindow(QMainWindow):
         self._ss("Tracking","#00ff88")
 
         alpha = 1-(self.sms.value()/30.0)*0.92
-        dz = self.dzs.value()  # dead zone percentage (0-15)
         for gid,val in raw.items():
             self.sm[gid]=self.sm.get(gid,0)*(1-alpha)+val*alpha
-            # Apply dead zone: values below dz are snapped to 0
+            # Apply per-gesture dead zone: values below dz are snapped to 0
+            dz = self.cards[gid].dzs.value() if gid in self.cards else 3
             if self.sm[gid] < dz:
                 self.sm[gid] = 0.0
             self.lv[gid]=self.sm[gid]
@@ -2449,7 +3109,8 @@ class MainWindow(QMainWindow):
             val=self.lv.get(gid,0)
             th = s['thresholdMin']; th_max = s.get('thresholdMax', 100)
             mode = s.get('triggerMode', 'single')
-            act = s['action']; kb = s['keyBind']; cmd = s['command']; macro = s.get('macro','')
+            act = s['action']; kb = s['keyBind']; macro = s.get('macro','')
+            cmd = s.get('launchProgram','') if act == 'launch_program' else s['command']
             gp_btn = s.get('gamepadBtn',''); gp_axis = s.get('gamepadAxis','')
             gp_invert = s.get('gamepadInvert', False); gp_dz = s.get('gamepadDeadzone', 5)
 
@@ -2594,7 +3255,7 @@ class MainWindow(QMainWindow):
                             self._toggle_gestures(self._collect_toggle_exempt_gestures(f'chain:{cid}'))
                         else:
                             threading.Thread(target=execute_action,
-                                args=(a_state['action'], a_state['keyBind'], a_state['command'], a_state['macro'], a_state.get('gamepadBtn','')),
+                                args=(a_state['action'], a_state['keyBind'], a_state.get('launchProgram','') if a_state['action']=='launch_program' else a_state['command'], a_state['macro'], a_state.get('gamepadBtn','')),
                                 daemon=True).start()
                             chain_name = chain.name_lbl.text()
                             self._logit(f"\u26A1{chain_name}", a_state['action'], a_state['keyBind'], a_state['macro'], mode_tag='CHAIN')
@@ -2643,7 +3304,7 @@ class MainWindow(QMainWindow):
                                         self._toggle_gestures(self._collect_toggle_exempt_gestures(f'morse:{cid}'))
                                     else:
                                         threading.Thread(target=execute_action,
-                                            args=(a_state['action'], a_state['keyBind'], a_state['command'], a_state['macro'], a_state.get('gamepadBtn','')),
+                                            args=(a_state['action'], a_state['keyBind'], a_state.get('launchProgram','') if a_state['action']=='launch_program' else a_state['command'], a_state['macro'], a_state.get('gamepadBtn','')),
                                             daemon=True).start()
                                         self._logit(f"\u2505{chain.name_lbl.text()}", a_state['action'], a_state['keyBind'], a_state['macro'], mode_tag='MORSE')
                                     matched = True; break
@@ -2651,6 +3312,38 @@ class MainWindow(QMainWindow):
                                 is_prefix = any(pat[:len(buf)] == buf for pat, _ in chain.get_patterns())
                                 if not is_prefix: self._mc_buf[cid] = []; buf = []
                     chain.set_progress(buf, 0.0, False)
+
+        # -- Point Tracker processing --
+        if self.pt_panel.en.isChecked() and self.pt.active:
+            self.pt.roi_size = self.pt_panel.roi_sl.value()
+            raw_dx, raw_dy = self.pt.track(frame)
+            # Normalize each axis by its own range setting
+            x_range = max(1, self.pt_panel.x_axis.rng_sl.value())
+            y_range = max(1, self.pt_panel.y_axis.rng_sl.value())
+            nx = max(-1.0, min(1.0, raw_dx / x_range))
+            ny = max(-1.0, min(1.0, raw_dy / y_range))
+            # Apply per-axis dead zone
+            x_dz = self.pt_panel.x_axis.dz_sl.value() / 100.0
+            y_dz = self.pt_panel.y_axis.dz_sl.value() / 100.0
+            if abs(nx) < x_dz: nx = 0.0
+            elif x_dz < 1.0: nx = (abs(nx) - x_dz) / (1.0 - x_dz) * (1.0 if nx > 0 else -1.0)
+            if abs(ny) < y_dz: ny = 0.0
+            elif y_dz < 1.0: ny = (abs(ny) - y_dz) / (1.0 - y_dz) * (1.0 if ny > 0 else -1.0)
+            # Apply invert
+            if self.pt_panel.x_axis.invert.isChecked(): nx = -nx
+            if self.pt_panel.y_axis.invert.isChecked(): ny = -ny
+            # Update live display
+            self.pt_panel.x_axis.set_live(nx)
+            self.pt_panel.y_axis.set_live(ny)
+            # Split into positive/negative 0-100 magnitudes and process each direction
+            x_pos_val = max(0, nx) * 100; x_neg_val = max(0, -nx) * 100
+            y_pos_val = max(0, ny) * 100; y_neg_val = max(0, -ny) * 100
+            if self.pt_panel.x_axis.en.isChecked():
+                self._pt_process_direction('x_pos', x_pos_val, now_ms)
+                self._pt_process_direction('x_neg', x_neg_val, now_ms)
+            if self.pt_panel.y_axis.en.isChecked():
+                self._pt_process_direction('y_pos', y_pos_val, now_ms)
+                self._pt_process_direction('y_neg', y_neg_val, now_ms)
 
     def _toggle_gestures_from_btn(self):
         """Called by the UI button — no exempt gestures needed since it's a manual button."""
@@ -2829,17 +3522,19 @@ class MainWindow(QMainWindow):
         for ch in list(self.chains): self._remove_chain(ch)
         for ch in list(self.morse_chains): self._remove_morse_chain(ch)
         for c in self.cards.values(): c.reset_def()
-        self.sms.setValue(12); self.cds.setValue(650); self.hds.setValue(200); self.dzs.setValue(3); self.pcs.setValue(35)
+        self.sms.setValue(12); self.cds.setValue(650); self.hds.setValue(200); self.pcs.setValue(35)
         self.zs.setValue(100); self.pxs.setValue(0); self.pys.setValue(0)
         self._reset_cam_settings(); self.res_cb.setCurrentIndex(1)
+        self._pt_clear(); self.pt_panel.en.setChecked(False)
         self._auto_save()
 
     def _get_cfg(self):
-        return {'version':'0.6.0','gestures':{gid:c.get_state() for gid,c in self.cards.items()},
+        return {'version':'0.7.0','gestures':{gid:c.get_state() for gid,c in self.cards.items()},
              'chains':[c.get_state() for c in self.chains],
              'morse_chains':[c.get_state() for c in self.morse_chains],
+             'point_tracker': self.pt_panel.get_state(),
              'camera': self._get_cam_settings_state(),
-             'global':{'smoothing':self.sms.value(),'cooldown':self.cds.value(),'holdTime':self.hds.value(),'deadZone':self.dzs.value(),'tiltComp':self.pcs.value(),'zoom':self.zs.value(),'panX':self.pxs.value(),'panY':self.pys.value()}}
+             'global':{'smoothing':self.sms.value(),'cooldown':self.cds.value(),'holdTime':self.hds.value(),'tiltComp':self.pcs.value(),'zoom':self.zs.value(),'panX':self.pxs.value(),'panY':self.pys.value()}}
 
     def _apply_cfg(self, cfg):
         if 'gestures' in cfg:
@@ -2858,10 +3553,11 @@ class MainWindow(QMainWindow):
                 self.morse_chains[-1].set_state(cs)
         if 'camera' in cfg:
             self._set_cam_settings_state(cfg['camera'])
+        if 'point_tracker' in cfg:
+            self.pt_panel.set_state(cfg['point_tracker'])
         if 'global' in cfg:
             g=cfg['global']; self.sms.setValue(g.get('smoothing',12))
             self.cds.setValue(g.get('cooldown',650)); self.hds.setValue(g.get('holdTime',200))
-            self.dzs.setValue(g.get('deadZone',3))
             self.pcs.setValue(g.get('tiltComp',35)); self.zs.setValue(g.get('zoom',100))
             self.pxs.setValue(g.get('panX',0)); self.pys.setValue(g.get('panY',0))
 
