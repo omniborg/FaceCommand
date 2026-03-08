@@ -47,6 +47,8 @@ MOUSEEVENTF_LEFTDOWN, MOUSEEVENTF_LEFTUP = 0x0002, 0x0004
 MOUSEEVENTF_RIGHTDOWN, MOUSEEVENTF_RIGHTUP = 0x0008, 0x0010
 MOUSEEVENTF_MIDDLEDOWN, MOUSEEVENTF_MIDDLEUP = 0x0020, 0x0040
 MOUSEEVENTF_WHEEL = 0x0800
+MOUSEEVENTF_MOVE = 0x0001
+MOUSEEVENTF_ABSOLUTE = 0x8000
 WHEEL_DELTA = 120
 
 class MOUSEINPUT(ctypes.Structure):
@@ -132,6 +134,26 @@ def execute_mouse_action(t):
     elif t == 'drag_toggle':
         if _drag_active: send_input(make_mouse_input(MOUSEEVENTF_LEFTUP)); _drag_active = False
         else: send_input(make_mouse_input(MOUSEEVENTF_LEFTDOWN)); _drag_active = True
+
+def execute_mouse_move_relative(dx, dy):
+    """Move mouse cursor by dx, dy pixels (relative)."""
+    if dx == 0 and dy == 0: return
+    inp = INPUT(); inp.type = INPUT_MOUSE
+    inp.union.mi.dx = int(dx); inp.union.mi.dy = int(dy)
+    inp.union.mi.mouseData = 0; inp.union.mi.dwFlags = MOUSEEVENTF_MOVE
+    inp.union.mi.time = 0; inp.union.mi.dwExtraInfo = ctypes.pointer(ctypes.c_ulong(0))
+    send_input(inp)
+
+def execute_mouse_move_absolute(nx, ny):
+    """Move mouse cursor to absolute position. nx, ny: 0.0-1.0 normalized screen coords."""
+    # MOUSEEVENTF_ABSOLUTE uses 0-65535 coordinate space
+    ax = max(0, min(65535, int(nx * 65535)))
+    ay = max(0, min(65535, int(ny * 65535)))
+    inp = INPUT(); inp.type = INPUT_MOUSE
+    inp.union.mi.dx = ax; inp.union.mi.dy = ay
+    inp.union.mi.mouseData = 0; inp.union.mi.dwFlags = MOUSEEVENTF_MOVE | MOUSEEVENTF_ABSOLUTE
+    inp.union.mi.time = 0; inp.union.mi.dwExtraInfo = ctypes.pointer(ctypes.c_ulong(0))
+    send_input(inp)
 
 def execute_key_down(key_bind):
     """Press key(s) down and hold them."""
@@ -1330,10 +1352,12 @@ class GestureChainCard(QFrame):
     chain_deleted = pyqtSignal(object)
     gesture_claimed = pyqtSignal(str)    # gesture_id claimed by this chain
     gesture_released = pyqtSignal(str)   # gesture_id released by this chain
+    chain_save_requested = pyqtSignal(object)  # request to save this chain to library
 
     def __init__(self, chain_id=0, parent=None):
         super().__init__(parent)
         self.chain_id = chain_id
+        self._saved_name = ''  # name of linked saved chain (empty = not linked)
         self.setStyleSheet("background:#16161f;border:1px solid #ffaa0055;border-radius:10px;")
         ly = QVBoxLayout(self); ly.setContentsMargins(12,12,12,12); ly.setSpacing(6)
 
@@ -1343,11 +1367,20 @@ class GestureChainCard(QFrame):
         ic.setStyleSheet("background:#ffaa0033;border-radius:6px;font-size:15px;border:none;")
         top.addWidget(ic)
         nb = QVBoxLayout(); nb.setSpacing(0)
-        self.name_lbl = QLabel(f"Gesture Chain #{chain_id+1}")
-        self.name_lbl.setStyleSheet("font-weight:600;font-size:13px;color:#ffaa00;border:none;")
+        self.name_edit = QLineEdit(f"Gesture Chain #{chain_id+1}")
+        self.name_edit.setStyleSheet("font-weight:600;font-size:13px;color:#ffaa00;border:1px solid transparent;border-radius:4px;background:transparent;padding:1px 4px;")
+        self.name_edit.setPlaceholderText("Chain name...")
+        # Also keep name_lbl as an alias for compatibility with action log
+        self.name_lbl = self.name_edit
         sub = QLabel("Sequential gesture trigger")
         sub.setStyleSheet("color:#555570;font-size:11px;border:none;")
-        nb.addWidget(self.name_lbl); nb.addWidget(sub); top.addLayout(nb); top.addStretch()
+        nb.addWidget(self.name_edit); nb.addWidget(sub); top.addLayout(nb); top.addStretch()
+
+        save_btn = QPushButton("\U0001F4BE Save"); save_btn.setFixedHeight(26)
+        save_btn.setStyleSheet("font-size:10px;padding:2px 8px;border:1px solid #00ff8855;color:#00ff88;border-radius:4px;background:transparent;")
+        save_btn.setToolTip("Save this chain to library")
+        save_btn.clicked.connect(lambda: self.chain_save_requested.emit(self))
+        top.addWidget(save_btn)
 
         del_btn = QPushButton("\U0001F5D1 Delete"); del_btn.setFixedHeight(26)
         del_btn.setStyleSheet("font-size:10px;padding:2px 8px;border:1px solid #ff446655;color:#ff4466;border-radius:4px;background:transparent;")
@@ -1466,7 +1499,8 @@ class GestureChainCard(QFrame):
                     gamepadInvert=self.gp_invert.isChecked())
 
     def get_state(self):
-        return dict(gestures=self.get_gesture_sequence(),
+        return dict(name=self.name_edit.text(), saved_name=self._saved_name,
+                    gestures=self.get_gesture_sequence(),
                     timeout=self.timeout_sl.value(),
                     action=self.ac.currentData(), keyBind=self.ke.text(),
                     command=self.ce.text(), launchProgram=self.lpe.text(),
@@ -1476,6 +1510,8 @@ class GestureChainCard(QFrame):
                     gamepadInvert=self.gp_invert.isChecked())
 
     def set_state(self, s):
+        self.name_edit.setText(s.get('name', f'Gesture Chain #{self.chain_id+1}'))
+        self._saved_name = s.get('saved_name', '')
         # Clear existing steps
         for r in list(self.step_rows): self._remove_gesture_step(r)
         for gid in s.get('gestures', []): self.add_gesture_step(gid)
@@ -1710,22 +1746,33 @@ class MorseChainCard(QFrame):
     chain_deleted = pyqtSignal(object)
     gesture_claimed = pyqtSignal(str)
     gesture_released = pyqtSignal(str)
+    chain_save_requested = pyqtSignal(object)  # request to save this chain to library
 
     def __init__(self, chain_id=0, parent=None):
         super().__init__(parent)
         self.chain_id = chain_id
         self._cur_gesture = ''
+        self._saved_name = ''  # name of linked saved chain (empty = not linked)
         self.setStyleSheet("background:#16161f;border:1px solid #ff884455;border-radius:10px;")
         ly = QVBoxLayout(self); ly.setContentsMargins(12,12,12,12); ly.setSpacing(6)
         top = QHBoxLayout()
         ic = QLabel("\u2505"); ic.setFixedSize(30,30); ic.setAlignment(Qt.AlignmentFlag.AlignCenter)
         ic.setStyleSheet("background:#ff884433;border-radius:6px;font-size:15px;border:none;"); top.addWidget(ic)
         nb = QVBoxLayout(); nb.setSpacing(0)
-        self.name_lbl = QLabel(f"Morse Chain #{chain_id+1}")
-        self.name_lbl.setStyleSheet("font-weight:600;font-size:13px;color:#ff8844;border:none;")
+        self.name_edit = QLineEdit(f"Morse Chain #{chain_id+1}")
+        self.name_edit.setStyleSheet("font-weight:600;font-size:13px;color:#ff8844;border:1px solid transparent;border-radius:4px;background:transparent;padding:1px 4px;")
+        self.name_edit.setPlaceholderText("Chain name...")
+        self.name_lbl = self.name_edit  # alias for compatibility
         sub = QLabel("Short \u00b7 Long \u2501 hold sequences \u2192 actions")
         sub.setStyleSheet("color:#555570;font-size:11px;border:none;")
-        nb.addWidget(self.name_lbl); nb.addWidget(sub); top.addLayout(nb); top.addStretch()
+        nb.addWidget(self.name_edit); nb.addWidget(sub); top.addLayout(nb); top.addStretch()
+
+        save_btn = QPushButton("\U0001F4BE Save"); save_btn.setFixedHeight(26)
+        save_btn.setStyleSheet("font-size:10px;padding:2px 8px;border:1px solid #00ff8855;color:#00ff88;border-radius:4px;background:transparent;")
+        save_btn.setToolTip("Save this chain to library")
+        save_btn.clicked.connect(lambda: self.chain_save_requested.emit(self))
+        top.addWidget(save_btn)
+
         del_btn = QPushButton("\U0001F5D1 Delete"); del_btn.setFixedHeight(26)
         del_btn.setStyleSheet("font-size:10px;padding:2px 8px;border:1px solid #ff446655;color:#ff4466;border-radius:4px;background:transparent;")
         del_btn.clicked.connect(lambda: self.chain_deleted.emit(self)); top.addWidget(del_btn)
@@ -1798,10 +1845,13 @@ class MorseChainCard(QFrame):
     def get_patterns(self):
         return [(row.get_pattern(), row.get_action_state()) for row in self.pattern_rows if row.get_pattern()]
     def get_state(self):
-        return dict(type='morse', gesture=self.gesture_id(), short_ms=self.sh_sl.value(),
+        return dict(type='morse', name=self.name_edit.text(), saved_name=self._saved_name,
+            gesture=self.gesture_id(), short_ms=self.sh_sl.value(),
             long_ms=self.lh_sl.value(), timeout=self.timeout_sl.value(),
             patterns=[row.get_state() for row in self.pattern_rows])
     def set_state(self, s):
+        self.name_edit.setText(s.get('name', f'Morse Chain #{self.chain_id+1}'))
+        self._saved_name = s.get('saved_name', '')
         gid = s.get('gesture', '')
         for i in range(self.gcb.count()):
             if self.gcb.itemData(i) == gid: self.gcb.setCurrentIndex(i); break
@@ -2119,10 +2169,10 @@ class PTDirectionConfig(QFrame):
 
 class PointTrackerAxisConfig(QFrame):
     """Config for one axis (X or Y) of the point tracker output.
-    Contains range, dead zone, invert, and two direction configs (+ and -)."""
+    Supports 1-output mode (single analog axis) or 2-output mode (split +/- directions)."""
     def __init__(self, axis_label, color, parent=None):
         super().__init__(parent)
-        self._color = color
+        self._color = color; self._axis_label = axis_label
         self.setStyleSheet("background:#1a1a26;border:1px solid #2a2a3a;border-radius:6px;")
         self.setSizePolicy(QSizePolicy.Policy.Preferred, QSizePolicy.Policy.Maximum)
         ly = QVBoxLayout(self); ly.setContentsMargins(8,6,8,6); ly.setSpacing(4)
@@ -2158,9 +2208,16 @@ class PointTrackerAxisConfig(QFrame):
         self.dz_sl.valueChanged.connect(lambda v: self.dz_val.setText(f"{v}%"))
         dz_row.addWidget(self.dz_val); ly.addLayout(dz_row)
 
-        # Invert checkbox
+        # Invert + Output mode selector on same row
+        opt_row = QHBoxLayout(); opt_row.setSpacing(6)
         self.invert = QCheckBox("Invert"); self.invert.setStyleSheet("font-size:10px;color:#8888a0;border:none;")
-        ly.addWidget(self.invert)
+        opt_row.addWidget(self.invert); opt_row.addStretch()
+        self.mode_cb = QComboBox(); self.mode_cb.setFixedHeight(20); self.mode_cb.setFixedWidth(90)
+        self.mode_cb.setStyleSheet("font-size:9px;padding:1px 4px;")
+        self.mode_cb.addItem("1 Output", "single"); self.mode_cb.addItem("2 Outputs", "split")
+        self.mode_cb.currentIndexChanged.connect(self._on_mode_changed)
+        opt_row.addWidget(self.mode_cb)
+        ly.addLayout(opt_row)
 
         # Live value display
         self.live_val = QLabel("+0.00"); self.live_val.setAlignment(Qt.AlignmentFlag.AlignCenter)
@@ -2169,19 +2226,91 @@ class PointTrackerAxisConfig(QFrame):
 
         sep = QFrame(); sep.setFrameShape(QFrame.Shape.HLine); sep.setStyleSheet("color:#2a2a3a;"); ly.addWidget(sep)
 
-        # Positive direction config
-        pos_label = f"{axis_label}+" if axis_label == 'X' else f"{axis_label}+"
-        neg_label = f"{axis_label}\u2212" if True else f"{axis_label}-"
+        # === Single output config (1 Output mode) ===
+        self._single_frame = QFrame()
+        self._single_frame.setStyleSheet("border:none;")
+        sly = QVBoxLayout(self._single_frame); sly.setContentsMargins(0,0,0,0); sly.setSpacing(3)
+        # Action type
+        sar = QHBoxLayout(); sar.setSpacing(4)
+        sal = QLabel("Action"); sal.setStyleSheet("font-size:10px;color:#8888a0;border:none;"); sar.addWidget(sal)
+        self.s_ac = QComboBox(); self.s_ac.setFixedHeight(22); self.s_ac.setMaxVisibleItems(25)
+        self.s_ac.setStyleSheet("font-size:10px;")
+        for v, l in ACTION_TYPES: self.s_ac.addItem(l, v)
+        self.s_ac.currentIndexChanged.connect(self._s_oa); sar.addWidget(self.s_ac, stretch=1)
+        sly.addLayout(sar)
+        self.s_ke = KeyCaptureEdit(); self.s_ke.setFixedHeight(22); self.s_ke.hide(); sly.addWidget(self.s_ke)
+        self.s_ce = QLineEdit(); self.s_ce.setPlaceholderText("Command..."); self.s_ce.setFixedHeight(22); self.s_ce.hide(); sly.addWidget(self.s_ce)
+        self.s_lpe = LaunchProgramEdit(); self.s_lpe.hide(); sly.addWidget(self.s_lpe)
+        self.s_me = MacroEditor(); self.s_me.hide(); sly.addWidget(self.s_me)
+        self.s_gp_btn_cb = QComboBox(); self.s_gp_btn_cb.setFixedHeight(22); self.s_gp_btn_cb.setMaxVisibleItems(25)
+        self.s_gp_btn_cb.setStyleSheet("font-size:10px;")
+        for btn_id, btn_label in GAMEPAD_BUTTONS: self.s_gp_btn_cb.addItem(btn_label, btn_id)
+        self.s_gp_btn_cb.hide(); sly.addWidget(self.s_gp_btn_cb)
+        self.s_gp_axis_cb = QComboBox(); self.s_gp_axis_cb.setFixedHeight(22); self.s_gp_axis_cb.setMaxVisibleItems(25)
+        self.s_gp_axis_cb.setStyleSheet("font-size:10px;")
+        for ax_id, ax_label, *_ in GAMEPAD_AXES: self.s_gp_axis_cb.addItem(ax_label, ax_id)
+        self.s_gp_axis_cb.hide(); sly.addWidget(self.s_gp_axis_cb)
+        # Live bar for single mode
+        self.s_live_bar = QProgressBar(); self.s_live_bar.setRange(0,100); self.s_live_bar.setValue(0)
+        self.s_live_bar.setTextVisible(False); self.s_live_bar.setFixedHeight(4)
+        self.s_live_bar.setStyleSheet(f"QProgressBar::chunk{{background:{color};border-radius:2px;}}")
+        sly.addWidget(self.s_live_bar)
+        ly.addWidget(self._single_frame)
+
+        # === Split output config (2 Outputs mode) ===
+        self._split_frame = QFrame()
+        self._split_frame.setStyleSheet("border:none;")
+        dly = QVBoxLayout(self._split_frame); dly.setContentsMargins(0,0,0,0); dly.setSpacing(4)
         pos_sub = "Right" if axis_label == 'X' else "Down"
         neg_sub = "Left" if axis_label == 'X' else "Up"
-        self.pos = PTDirectionConfig(f"{pos_label} ({pos_sub})", color)
-        self.neg = PTDirectionConfig(f"{neg_label} ({neg_sub})", color)
-        ly.addWidget(self.pos)
-        ly.addWidget(self.neg)
+        self.pos = PTDirectionConfig(f"{axis_label}+ ({pos_sub})", color)
+        self.neg = PTDirectionConfig(f"{axis_label}\u2212 ({neg_sub})", color)
+        dly.addWidget(self.pos); dly.addWidget(self.neg)
+        self._split_frame.hide()
+        ly.addWidget(self._split_frame)
+
+        # Default to single output
+        self._on_mode_changed()
+
+    def _s_oa(self):
+        a = self.s_ac.currentData()
+        self.s_ke.setVisible(a == 'key'); self.s_ce.setVisible(a == 'command')
+        self.s_lpe.setVisible(a == 'launch_program'); self.s_me.setVisible(a == 'macro')
+        self.s_gp_btn_cb.setVisible(a == 'gamepad_button'); self.s_gp_axis_cb.setVisible(a == 'gamepad_axis')
+
+    def _on_mode_changed(self):
+        is_single = self.mode_cb.currentData() == 'single'
+        self._single_frame.setVisible(is_single)
+        self._split_frame.setVisible(not is_single)
+
+    def is_single_mode(self):
+        return self.mode_cb.currentData() == 'single'
+
+    def get_single_state(self):
+        return dict(action=self.s_ac.currentData(), keyBind=self.s_ke.text(),
+            command=self.s_ce.text(), launchProgram=self.s_lpe.text(),
+            macro=self.s_me.to_macro_string(),
+            gamepadBtn=self.s_gp_btn_cb.currentData() or '',
+            gamepadAxis=self.s_gp_axis_cb.currentData() or '')
+
+    def set_single_state(self, s):
+        a = s.get('action', 'gamepad_axis')
+        for i in range(self.s_ac.count()):
+            if self.s_ac.itemData(i) == a: self.s_ac.setCurrentIndex(i); break
+        self.s_ke.setText(s.get('keyBind', '')); self.s_ce.setText(s.get('command', ''))
+        self.s_lpe.setText(s.get('launchProgram', '')); self.s_me.set_from_string(s.get('macro', ''))
+        gb = s.get('gamepadBtn', '')
+        for i in range(self.s_gp_btn_cb.count()):
+            if self.s_gp_btn_cb.itemData(i) == gb: self.s_gp_btn_cb.setCurrentIndex(i); break
+        ga = s.get('gamepadAxis', '')
+        for i in range(self.s_gp_axis_cb.count()):
+            if self.s_gp_axis_cb.itemData(i) == ga: self.s_gp_axis_cb.setCurrentIndex(i); break
 
     def get_state(self):
         return dict(enabled=self.en.isChecked(), range_px=self.rng_sl.value(),
             dead_zone=self.dz_sl.value(), invert=self.invert.isChecked(),
+            mode=self.mode_cb.currentData(),
+            single=self.get_single_state(),
             pos=self.pos.get_state(), neg=self.neg.get_state())
 
     def set_state(self, s):
@@ -2189,15 +2318,21 @@ class PointTrackerAxisConfig(QFrame):
         self.rng_sl.setValue(s.get('range_px', 60))
         self.dz_sl.setValue(s.get('dead_zone', 5))
         self.invert.setChecked(s.get('invert', False))
+        mode = s.get('mode', 'single')
+        for i in range(self.mode_cb.count()):
+            if self.mode_cb.itemData(i) == mode: self.mode_cb.setCurrentIndex(i); break
+        if 'single' in s: self.set_single_state(s['single'])
         if 'pos' in s: self.pos.set_state(s['pos'])
         if 'neg' in s: self.neg.set_state(s['neg'])
 
     def set_live(self, val):
         """val: -1.0 to 1.0"""
         self.live_val.setText(f"{val:+.2f}")
-        # Update per-direction live bars (0-100 scale)
-        self.pos.set_live(max(0, val) * 100)
-        self.neg.set_live(max(0, -val) * 100)
+        if self.is_single_mode():
+            self.s_live_bar.setValue(int(abs(val) * 100))
+        else:
+            self.pos.set_live(max(0, val) * 100)
+            self.neg.set_live(max(0, -val) * 100)
 
 
 class PointTrackerPanel(QFrame):
@@ -2252,6 +2387,60 @@ class PointTrackerPanel(QFrame):
         btn_row.addWidget(self.recenter_btn)
         bly.addLayout(btn_row)
 
+        # Mouse Control section
+        msep = QFrame(); msep.setFrameShape(QFrame.Shape.HLine); msep.setStyleSheet("color:#2a2a3a;"); bly.addWidget(msep)
+
+        mouse_hdr = QHBoxLayout(); mouse_hdr.setSpacing(6)
+        mic = QLabel("\U0001F5B1"); mic.setFixedSize(22,22); mic.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        mic.setStyleSheet("background:#ff66aa33;border-radius:4px;font-size:12px;border:none;")
+        mouse_hdr.addWidget(mic)
+        mlbl = QLabel("Mouse Control"); mlbl.setStyleSheet("font-weight:600;font-size:11px;color:#ff66aa;border:none;")
+        mouse_hdr.addWidget(mlbl); mouse_hdr.addStretch()
+        self.mouse_en = QCheckBox(); self.mouse_en.setChecked(False)
+        self.mouse_en.setToolTip("Control mouse cursor with point tracker")
+        mouse_hdr.addWidget(self.mouse_en)
+        bly.addLayout(mouse_hdr)
+
+        # Mouse options (visible when mouse_en is checked)
+        self._mouse_body = QFrame()
+        self._mouse_body.setStyleSheet("background:transparent;border:none;")
+        mly = QVBoxLayout(self._mouse_body); mly.setContentsMargins(0,0,0,0); mly.setSpacing(4)
+
+        # Mode: Relative vs Absolute
+        mmode_row = QHBoxLayout(); mmode_row.setSpacing(6)
+        mml = QLabel("Mode"); mml.setStyleSheet("font-size:10px;color:#8888a0;border:none;"); mmode_row.addWidget(mml)
+        self.mouse_mode = QComboBox(); self.mouse_mode.setFixedHeight(22)
+        self.mouse_mode.setStyleSheet("font-size:10px;")
+        self.mouse_mode.addItem("Relative (Joystick)", "relative")
+        self.mouse_mode.addItem("Absolute (Position)", "absolute")
+        mmode_row.addWidget(self.mouse_mode, stretch=1); mly.addLayout(mmode_row)
+
+        # Speed slider (for relative mode: pixels per frame at full deflection)
+        spd_row = QHBoxLayout(); spd_row.setSpacing(4)
+        spdl = QLabel("Speed"); spdl.setStyleSheet("font-size:10px;color:#8888a0;border:none;"); spd_row.addWidget(spdl)
+        self.mouse_speed = QSlider(Qt.Orientation.Horizontal); self.mouse_speed.setRange(1,50); self.mouse_speed.setValue(15)
+        self.mouse_speed.setStyleSheet("QSlider::handle:horizontal{background:#ff66aa;border:2px solid #16161f;}")
+        spd_row.addWidget(self.mouse_speed, stretch=1)
+        self.mouse_speed_val = QLabel("15"); self.mouse_speed_val.setStyleSheet("font-family:Consolas;font-size:10px;color:#ff66aa;min-width:22px;border:none;")
+        self.mouse_speed_val.setAlignment(Qt.AlignmentFlag.AlignRight|Qt.AlignmentFlag.AlignVCenter)
+        self.mouse_speed.valueChanged.connect(lambda v: self.mouse_speed_val.setText(str(v)))
+        spd_row.addWidget(self.mouse_speed_val); mly.addLayout(spd_row)
+
+        # Smoothing slider (for relative: higher = more smoothing on cursor movement)
+        msm_row = QHBoxLayout(); msm_row.setSpacing(4)
+        msml = QLabel("Smooth"); msml.setStyleSheet("font-size:10px;color:#8888a0;border:none;"); msm_row.addWidget(msml)
+        self.mouse_smooth = QSlider(Qt.Orientation.Horizontal); self.mouse_smooth.setRange(0,20); self.mouse_smooth.setValue(5)
+        self.mouse_smooth.setStyleSheet("QSlider::handle:horizontal{background:#ff66aa;border:2px solid #16161f;}")
+        msm_row.addWidget(self.mouse_smooth, stretch=1)
+        self.mouse_smooth_val = QLabel("5"); self.mouse_smooth_val.setStyleSheet("font-family:Consolas;font-size:10px;color:#ff66aa;min-width:22px;border:none;")
+        self.mouse_smooth_val.setAlignment(Qt.AlignmentFlag.AlignRight|Qt.AlignmentFlag.AlignVCenter)
+        self.mouse_smooth.valueChanged.connect(lambda v: self.mouse_smooth_val.setText(str(v)))
+        msm_row.addWidget(self.mouse_smooth_val); mly.addLayout(msm_row)
+
+        bly.addWidget(self._mouse_body)
+        self._mouse_body.hide()
+        self.mouse_en.toggled.connect(self._mouse_body.setVisible)
+
         sep = QFrame(); sep.setFrameShape(QFrame.Shape.HLine); sep.setStyleSheet("color:#2a2a3a;"); bly.addWidget(sep)
 
         # X and Y axis configs side by side
@@ -2277,11 +2466,21 @@ class PointTrackerPanel(QFrame):
 
     def get_state(self):
         return dict(enabled=self.en.isChecked(), roi_size=self.roi_sl.value(),
+            mouse_enabled=self.mouse_en.isChecked(),
+            mouse_mode=self.mouse_mode.currentData(),
+            mouse_speed=self.mouse_speed.value(),
+            mouse_smooth=self.mouse_smooth.value(),
             x_axis=self.x_axis.get_state(), y_axis=self.y_axis.get_state())
 
     def set_state(self, s):
         self.en.setChecked(s.get('enabled', False))
         self.roi_sl.setValue(s.get('roi_size', 31))
+        self.mouse_en.setChecked(s.get('mouse_enabled', False))
+        mm = s.get('mouse_mode', 'relative')
+        for i in range(self.mouse_mode.count()):
+            if self.mouse_mode.itemData(i) == mm: self.mouse_mode.setCurrentIndex(i); break
+        self.mouse_speed.setValue(s.get('mouse_speed', 15))
+        self.mouse_smooth.setValue(s.get('mouse_smooth', 5))
         if 'x_axis' in s: self.x_axis.set_state(s['x_axis'])
         if 'y_axis' in s: self.y_axis.set_state(s['y_axis'])
 
@@ -2311,6 +2510,8 @@ class MainWindow(QMainWindow):
         self.morse_chains = []    # list of MorseChainCard widgets
         self.chain_counter = 0    # for unique chain IDs
         self.chain_state = {}     # chain_id -> {step:int, last_time:float, prev_active:set}
+        self.saved_chains_lib = {}       # name -> state dict (gesture chains)
+        self.saved_morse_chains_lib = {} # name -> state dict (morse chains)
         self._auto_profile = os.path.join(os.path.dirname(os.path.abspath(__file__)), '.facecommand_last_profile.json')
         # Point tracker
         self.pt = PointTracker()
@@ -2325,8 +2526,14 @@ class MainWindow(QMainWindow):
         self._pt_hold = {d:False for d in self._pt_dirs}    # hold mode active
         self._pt_tog_state = {d:False for d in self._pt_dirs}  # toggle state
         self._pt_rpt = {d:0.0 for d in self._pt_dirs}      # last repeat time
+        self._pt_mouse_sx = 0.0  # smoothed mouse dx
+        self._pt_mouse_sy = 0.0  # smoothed mouse dy
         self._build()
         self._auto_load()
+        # Auto-start camera after load if enabled (use a short timer to let UI settle)
+        if self.auto_start_cb.isChecked():
+            from PyQt6.QtCore import QTimer
+            QTimer.singleShot(500, self._start)
 
     def _build(self):
         c=QWidget(); self.setCentralWidget(c); root=QVBoxLayout(c); root.setContentsMargins(0,0,0,0); root.setSpacing(0)
@@ -2356,6 +2563,10 @@ class MainWindow(QMainWindow):
         self._available_cams = enumerate_cameras()
         self._populate_cameras()
         self.rcb=QPushButton("\u27F3 Recalibrate"); self.rcb.setMinimumWidth(100); self.rcb.clicked.connect(self._recal); self.rcb.hide(); hl.addWidget(self.rcb)
+        self.auto_start_cb=QCheckBox("Auto Start"); self.auto_start_cb.setChecked(False)
+        self.auto_start_cb.setToolTip("Automatically start camera on launch")
+        self.auto_start_cb.setStyleSheet("font-size:10px;color:#8888a0;border:none;")
+        hl.addWidget(self.auto_start_cb)
         self.cb=QPushButton("\u25B6 Start Camera"); self.cb.setMinimumWidth(140); self.cb.clicked.connect(self._tc); hl.addWidget(self.cb)
         self._set_btn_primary()
         root.addWidget(hdr)
@@ -2373,8 +2584,8 @@ class MainWindow(QMainWindow):
         _cam_ly = QVBoxLayout(cam_container); _cam_ly.setContentsMargins(0,0,0,0); _cam_ly.setSpacing(0)
         _cam_ly.addWidget(self.vl)
         # Toggle Gestures button — compact, top-right corner of feed
-        self._toggle_gestures_btn = QPushButton("\U0001F50A", cam_container)
-        self._toggle_gestures_btn.setFixedSize(32, 32)
+        self._toggle_gestures_btn = QPushButton("\U0001F50A On", cam_container)
+        self._toggle_gestures_btn.setFixedSize(60, 26)
         self._toggle_gestures_btn.setToolTip("Toggle all gestures on/off")
         self._toggle_gestures_btn.setCursor(Qt.CursorShape.PointingHandCursor)
         self._update_toggle_btn_style()
@@ -2382,10 +2593,10 @@ class MainWindow(QMainWindow):
         self._toggle_gestures_btn.raise_()
         # Position button at top-right of container
         def _reposition_toggle_btn(event=None):
-            self._toggle_gestures_btn.move(cam_container.width() - 36, 4)
+            self._toggle_gestures_btn.move(cam_container.width() - 64, 4)
             if event: type(cam_container).resizeEvent(cam_container, event)
         cam_container.resizeEvent = _reposition_toggle_btn
-        self._toggle_gestures_btn.move(320 - 36, 4)
+        self._toggle_gestures_btn.move(320 - 64, 4)
         # Enable mouse clicks on camera feed for point tracker
         self.vl.mousePressEvent = self._on_cam_click
         self.vl.setCursor(Qt.CursorShape.CrossCursor)
@@ -2572,6 +2783,11 @@ class MainWindow(QMainWindow):
         chain_hdr = QHBoxLayout()
         chain_hdr.addWidget(self._sec("GESTURE CHAINS"))
         chain_hdr.addStretch()
+        self.manage_chains_btn = QPushButton("\u2699 Manage Saved")
+        self.manage_chains_btn.setFixedHeight(28)
+        self.manage_chains_btn.setStyleSheet("font-size:10px;padding:4px 8px;border:1px solid #2a2a3a;color:#8888a0;border-radius:6px;background:transparent;")
+        self.manage_chains_btn.clicked.connect(self._manage_saved_chains)
+        chain_hdr.addWidget(self.manage_chains_btn)
         self.add_chain_btn = QPushButton("\u26A1 Add Gesture Chain")
         self.add_chain_btn.setFixedHeight(28)
         self.add_chain_btn.setStyleSheet("font-size:11px;padding:4px 12px;border:1px solid #ffaa00;color:#ffaa00;border-radius:6px;background:#ffaa0015;font-weight:600;")
@@ -2583,6 +2799,23 @@ class MainWindow(QMainWindow):
         self.add_morse_btn.clicked.connect(self._add_morse_chain)
         chain_hdr.addWidget(self.add_morse_btn)
         rl.addLayout(chain_hdr)
+
+        # Load saved chain dropdowns row
+        load_row = QHBoxLayout(); load_row.setSpacing(6)
+        load_lbl = QLabel("Load Saved:")
+        load_lbl.setStyleSheet("font-size:10px;color:#8888a0;border:none;")
+        load_row.addWidget(load_lbl)
+        self.load_chain_cb = QComboBox(); self.load_chain_cb.setFixedHeight(26)
+        self.load_chain_cb.setStyleSheet("font-size:10px;padding:2px 6px;min-width:120px;")
+        self.load_chain_cb.addItem("\u26A1 Gesture Chains...", None)
+        self.load_chain_cb.activated.connect(self._load_saved_chain)
+        load_row.addWidget(self.load_chain_cb, stretch=1)
+        self.load_morse_cb = QComboBox(); self.load_morse_cb.setFixedHeight(26)
+        self.load_morse_cb.setStyleSheet("font-size:10px;padding:2px 6px;min-width:120px;")
+        self.load_morse_cb.addItem("\u2505 Morse Chains...", None)
+        self.load_morse_cb.activated.connect(self._load_saved_morse_chain)
+        load_row.addWidget(self.load_morse_cb, stretch=1)
+        rl.addLayout(load_row)
 
         self.chains_layout = QVBoxLayout(); self.chains_layout.setContentsMargins(0,0,0,0); self.chains_layout.setSpacing(8)
         rl.addLayout(self.chains_layout)
@@ -2769,6 +3002,7 @@ class MainWindow(QMainWindow):
         for d in self._pt_dirs:
             self._pt_hs[d]=0.0; self._pt_ta[d]=False; self._pt_lt[d]=0.0
             self._pt_hold[d]=False; self._pt_tog_state[d]=False; self._pt_rpt[d]=0.0
+        self._pt_mouse_sx = 0.0; self._pt_mouse_sy = 0.0
         # Restore gestures if they were toggled off
         if self._gestures_disabled:
             for gid, was_enabled in self._saved_gesture_states.items():
@@ -2794,6 +3028,7 @@ class MainWindow(QMainWindow):
         self.cam.status_changed.connect(lambda t: self._ss(t,"#ffaa00"))
         self.cam.error.connect(lambda e: self._ss(e,"#ff4466")); self.cam.start()
         self.cb.setText("\u25A0 Stop Camera"); self._set_btn_danger(); self.rcb.show()
+        self._auto_save()  # persist last camera selection
     def _init_gamepad_if_needed(self):
         """Create virtual gamepad if any gesture uses a gamepad action."""
         needs_gp = False
@@ -2814,9 +3049,16 @@ class MainWindow(QMainWindow):
         self._pt_clear()
         self._pt_last_frame = None
     def _recal(self):
+        self.rcb.setEnabled(False)
+        self.rcb.setText("\u23F3 Wait...")
+        from PyQt6.QtCore import QTimer
+        QTimer.singleShot(1000, self._recal_execute)
+    def _recal_execute(self):
         self._release_all_holds()
         self.chain_state={}
         self.det.reset(); self.sm={k:0 for k in self.sm}; self._ss("Calibrating...","#ffaa00")
+        self.rcb.setEnabled(True)
+        self.rcb.setText("\u27F3 Recalibrate")
     def _release_all_holds(self):
         """Release any keys/buttons currently held by hold or toggle mode."""
         for g in GESTURES:
@@ -2885,12 +3127,21 @@ class MainWindow(QMainWindow):
         self.pt_panel.y_axis.set_live(0.0)
 
     def _pt_recenter(self):
-        """Re-center the point tracker origin to its current position."""
+        """Re-center the point tracker origin to its current position (with 1s delay)."""
+        self.pt_panel.recenter_btn.setEnabled(False)
+        self.pt_panel.recenter_btn.setText("\u23F3 Wait...")
+        from PyQt6.QtCore import QTimer
+        QTimer.singleShot(1000, self._pt_recenter_execute)
+
+    def _pt_recenter_execute(self):
+        """Actually perform the recenter after delay."""
         if self.pt.active and self.pt.current:
             self.pt._origin = self.pt._current
             self.pt._x_filter.reset()
             self.pt._y_filter.reset()
             self.pt_panel.status_lbl.setText(f"Re-centered at ({self.pt.current[0]}, {self.pt.current[1]})")
+        self.pt_panel.recenter_btn.setEnabled(True)
+        self.pt_panel.recenter_btn.setText("\u25CE Re-center")
 
     def _pt_toggle(self, enabled):
         """Toggle point tracker on/off."""
@@ -3332,18 +3583,54 @@ class MainWindow(QMainWindow):
             # Apply invert
             if self.pt_panel.x_axis.invert.isChecked(): nx = -nx
             if self.pt_panel.y_axis.invert.isChecked(): ny = -ny
+
+            # Mouse cursor control (panel-level, consumes both axes)
+            if self.pt_panel.mouse_en.isChecked():
+                mouse_mode = self.pt_panel.mouse_mode.currentData()
+                if mouse_mode == 'relative':
+                    speed = self.pt_panel.mouse_speed.value()
+                    smooth = self.pt_panel.mouse_smooth.value() / 20.0  # 0..1
+                    # Raw pixel deltas this frame
+                    raw_mx = nx * speed
+                    raw_my = ny * speed
+                    # Apply smoothing (EMA)
+                    self._pt_mouse_sx = self._pt_mouse_sx * smooth + raw_mx * (1.0 - smooth)
+                    self._pt_mouse_sy = self._pt_mouse_sy * smooth + raw_my * (1.0 - smooth)
+                    execute_mouse_move_relative(self._pt_mouse_sx, self._pt_mouse_sy)
+                elif mouse_mode == 'absolute':
+                    # Map -1..1 to screen coords 0..1
+                    # nx=-1 = left edge, nx=0 = center, nx=1 = right edge
+                    screen_x = (nx + 1.0) / 2.0
+                    screen_y = (ny + 1.0) / 2.0
+                    execute_mouse_move_absolute(screen_x, screen_y)
+
             # Update live display
             self.pt_panel.x_axis.set_live(nx)
             self.pt_panel.y_axis.set_live(ny)
-            # Split into positive/negative 0-100 magnitudes and process each direction
-            x_pos_val = max(0, nx) * 100; x_neg_val = max(0, -nx) * 100
-            y_pos_val = max(0, ny) * 100; y_neg_val = max(0, -ny) * 100
-            if self.pt_panel.x_axis.en.isChecked():
-                self._pt_process_direction('x_pos', x_pos_val, now_ms)
-                self._pt_process_direction('x_neg', x_neg_val, now_ms)
-            if self.pt_panel.y_axis.en.isChecked():
-                self._pt_process_direction('y_pos', y_pos_val, now_ms)
-                self._pt_process_direction('y_neg', y_neg_val, now_ms)
+            # Process each axis based on its output mode
+            for axis, nval, pos_key, neg_key in [
+                (self.pt_panel.x_axis, nx, 'x_pos', 'x_neg'),
+                (self.pt_panel.y_axis, ny, 'y_pos', 'y_neg')]:
+                if not axis.en.isChecked(): continue
+                if axis.is_single_mode():
+                    # Single output: pass -1..1 directly to action (gamepad axis maps to 0..1)
+                    s = axis.get_single_state()
+                    act = s['action']
+                    if act == 'gamepad_axis' and s.get('gamepadAxis',''):
+                        normalized = (nval + 1.0) / 2.0  # -1..1 -> 0..1
+                        execute_gamepad_axis(s['gamepadAxis'], max(0.0, min(1.0, normalized)))
+                    elif act == 'gamepad_button' and s.get('gamepadBtn',''):
+                        # Treat as threshold: fire if |val| > 0.5
+                        if abs(nval) > 0.5:
+                            execute_gamepad_button_press(s['gamepadBtn'])
+                    elif act == 'key' and s.get('keyBind',''):
+                        if abs(nval) > 0.5:
+                            execute_key_press(s['keyBind'])
+                else:
+                    # Split output: process each direction independently
+                    pos_val = max(0, nval) * 100; neg_val = max(0, -nval) * 100
+                    self._pt_process_direction(pos_key, pos_val, now_ms)
+                    self._pt_process_direction(neg_key, neg_val, now_ms)
 
     def _toggle_gestures_from_btn(self):
         """Called by the UI button — no exempt gestures needed since it's a manual button."""
@@ -3353,18 +3640,18 @@ class MainWindow(QMainWindow):
     def _update_toggle_btn_style(self):
         """Update the toggle button appearance based on current state."""
         if self._gestures_disabled:
-            self._toggle_gestures_btn.setText("\U0001F507")
+            self._toggle_gestures_btn.setText("\U0001F507 Off")
             self._toggle_gestures_btn.setToolTip("Gestures OFF — click to re-enable")
             self._toggle_gestures_btn.setStyleSheet(
                 "QPushButton{background:#ff4466aa;border:1px solid #ff4466;border-radius:6px;"
-                "color:#ffffff;font-size:15px;padding:0;}"
+                "color:#ffffff;font-size:11px;font-weight:600;padding:0 4px;}"
                 "QPushButton:hover{background:#ff4466cc;}")
         else:
-            self._toggle_gestures_btn.setText("\U0001F50A")
+            self._toggle_gestures_btn.setText("\U0001F50A On")
             self._toggle_gestures_btn.setToolTip("Gestures ON — click to disable all")
             self._toggle_gestures_btn.setStyleSheet(
                 "QPushButton{background:#00ff8833;border:1px solid #00ff8855;border-radius:6px;"
-                "color:#00ff88;font-size:15px;padding:0;}"
+                "color:#00ff88;font-size:11px;font-weight:600;padding:0 4px;}"
                 "QPushButton:hover{background:#00ff8855;}")
 
     def _toggle_gestures(self, source_gesture_ids=None):
@@ -3423,6 +3710,7 @@ class MainWindow(QMainWindow):
         chain.chain_deleted.connect(self._remove_chain)
         chain.gesture_claimed.connect(self._on_gesture_claimed)
         chain.gesture_released.connect(self._on_gesture_released)
+        chain.chain_save_requested.connect(self._save_chain_to_lib)
         self.chains.append(chain)
         self.chains_layout.addWidget(chain)
         self._update_no_chains_label()
@@ -3446,6 +3734,7 @@ class MainWindow(QMainWindow):
         chain.chain_deleted.connect(self._remove_morse_chain)
         chain.gesture_claimed.connect(self._on_gesture_claimed)
         chain.gesture_released.connect(self._on_gesture_released)
+        chain.chain_save_requested.connect(self._save_morse_chain_to_lib)
         chain.connect_reset(lambda cid=cid: self._reset_morse_chain(cid))
         self.morse_chains.append(chain)
         self.chains_layout.addWidget(chain)
@@ -3491,6 +3780,136 @@ class MainWindow(QMainWindow):
     def _update_no_chains_label(self):
         self.no_chains_lbl.setVisible(len(self.chains) == 0 and len(self.morse_chains) == 0)
 
+    # ••• Chain Library Methods •••
+    def _save_chain_to_lib(self, chain):
+        """Save a gesture chain to the library."""
+        name = chain.name_edit.text().strip()
+        if not name:
+            name = f"Gesture Chain #{chain.chain_id+1}"
+            chain.name_edit.setText(name)
+        state = chain.get_state()
+        # Remove runtime keys that shouldn't persist in library
+        lib_state = {k: v for k, v in state.items() if k != 'saved_name'}
+        self.saved_chains_lib[name] = lib_state
+        chain._saved_name = name
+        self._refresh_load_dropdowns()
+        self._auto_save()
+        # Brief visual feedback
+        chain.name_edit.setStyleSheet("font-weight:600;font-size:13px;color:#00ff88;border:1px solid #00ff88;border-radius:4px;background:#00ff8815;padding:1px 4px;")
+        from PyQt6.QtCore import QTimer
+        QTimer.singleShot(800, lambda: chain.name_edit.setStyleSheet(
+            "font-weight:600;font-size:13px;color:#ffaa00;border:1px solid transparent;border-radius:4px;background:transparent;padding:1px 4px;"))
+
+    def _save_morse_chain_to_lib(self, chain):
+        """Save a morse chain to the library."""
+        name = chain.name_edit.text().strip()
+        if not name:
+            name = f"Morse Chain #{chain.chain_id+1}"
+            chain.name_edit.setText(name)
+        state = chain.get_state()
+        lib_state = {k: v for k, v in state.items() if k != 'saved_name'}
+        self.saved_morse_chains_lib[name] = lib_state
+        chain._saved_name = name
+        self._refresh_load_dropdowns()
+        self._auto_save()
+        # Brief visual feedback
+        chain.name_edit.setStyleSheet("font-weight:600;font-size:13px;color:#00ff88;border:1px solid #00ff88;border-radius:4px;background:#00ff8815;padding:1px 4px;")
+        from PyQt6.QtCore import QTimer
+        QTimer.singleShot(800, lambda: chain.name_edit.setStyleSheet(
+            "font-weight:600;font-size:13px;color:#ff8844;border:1px solid transparent;border-radius:4px;background:transparent;padding:1px 4px;"))
+
+    def _load_saved_chain(self, index):
+        """Load a saved gesture chain from the dropdown."""
+        if index <= 0: return  # placeholder item
+        name = self.load_chain_cb.itemData(index)
+        if name and name in self.saved_chains_lib:
+            self._add_chain()
+            state = dict(self.saved_chains_lib[name])
+            state['saved_name'] = name
+            self.chains[-1].set_state(state)
+        self.load_chain_cb.setCurrentIndex(0)  # reset dropdown
+
+    def _load_saved_morse_chain(self, index):
+        """Load a saved morse chain from the dropdown."""
+        if index <= 0: return
+        name = self.load_morse_cb.itemData(index)
+        if name and name in self.saved_morse_chains_lib:
+            self._add_morse_chain()
+            state = dict(self.saved_morse_chains_lib[name])
+            state['saved_name'] = name
+            self.morse_chains[-1].set_state(state)
+        self.load_morse_cb.setCurrentIndex(0)
+
+    def _refresh_load_dropdowns(self):
+        """Refresh the load-saved-chain combo boxes."""
+        self.load_chain_cb.clear()
+        self.load_chain_cb.addItem("\u26A1 Gesture Chains...", None)
+        for name in sorted(self.saved_chains_lib.keys()):
+            self.load_chain_cb.addItem(f"\u26A1 {name}", name)
+        self.load_morse_cb.clear()
+        self.load_morse_cb.addItem("\u2505 Morse Chains...", None)
+        for name in sorted(self.saved_morse_chains_lib.keys()):
+            self.load_morse_cb.addItem(f"\u2505 {name}", name)
+
+    def _manage_saved_chains(self):
+        """Open a dialog to view and delete saved chains."""
+        dlg = QDialog(self)
+        dlg.setWindowTitle("Manage Saved Chains")
+        dlg.setMinimumSize(420, 350)
+        dlg.setStyleSheet("QDialog{background:#0a0a0f;color:#e8e8f0;} QListWidget{background:#16161f;border:1px solid #2a2a3a;border-radius:6px;color:#e8e8f0;font-size:12px;} QListWidget::item{padding:4px 8px;} QListWidget::item:selected{background:#00d4ff33;}")
+        ly = QVBoxLayout(dlg); ly.setContentsMargins(16,16,16,16); ly.setSpacing(10)
+
+        # Gesture chains list
+        ly.addWidget(QLabel("\u26A1 Saved Gesture Chains"))
+        gc_list = QListWidget()
+        for name in sorted(self.saved_chains_lib.keys()):
+            gc_list.addItem(name)
+        ly.addWidget(gc_list)
+        del_gc_btn = QPushButton("Delete Selected Gesture Chain")
+        del_gc_btn.setStyleSheet("padding:6px;border:1px solid #ff4466;color:#ff4466;border-radius:6px;background:transparent;")
+        ly.addWidget(del_gc_btn)
+
+        # Morse chains list
+        ly.addWidget(QLabel("\u2505 Saved Morse Chains"))
+        mc_list = QListWidget()
+        for name in sorted(self.saved_morse_chains_lib.keys()):
+            mc_list.addItem(name)
+        ly.addWidget(mc_list)
+        del_mc_btn = QPushButton("Delete Selected Morse Chain")
+        del_mc_btn.setStyleSheet("padding:6px;border:1px solid #ff4466;color:#ff4466;border-radius:6px;background:transparent;")
+        ly.addWidget(del_mc_btn)
+
+        close_btn = QPushButton("Close")
+        close_btn.setStyleSheet("padding:6px 20px;border:1px solid #2a2a3a;color:#e8e8f0;border-radius:6px;background:#16161f;")
+        close_btn.clicked.connect(dlg.accept)
+        ly.addWidget(close_btn, alignment=Qt.AlignmentFlag.AlignRight)
+
+        def _del_gc():
+            item = gc_list.currentItem()
+            if item:
+                name = item.text()
+                self.saved_chains_lib.pop(name, None)
+                gc_list.takeItem(gc_list.row(item))
+                # Unlink any active chains that reference this saved name
+                for ch in self.chains:
+                    if ch._saved_name == name: ch._saved_name = ''
+                self._refresh_load_dropdowns()
+                self._auto_save()
+        def _del_mc():
+            item = mc_list.currentItem()
+            if item:
+                name = item.text()
+                self.saved_morse_chains_lib.pop(name, None)
+                mc_list.takeItem(mc_list.row(item))
+                for ch in self.morse_chains:
+                    if ch._saved_name == name: ch._saved_name = ''
+                self._refresh_load_dropdowns()
+                self._auto_save()
+
+        del_gc_btn.clicked.connect(_del_gc)
+        del_mc_btn.clicked.connect(_del_mc)
+        dlg.exec()
+
     def _logit(self,gn,at,kb='',macro='',mode_tag=''):
         ts=datetime.now().strftime('%H:%M:%S')
         if at=='none': return
@@ -3532,8 +3951,12 @@ class MainWindow(QMainWindow):
         return {'version':'0.7.0','gestures':{gid:c.get_state() for gid,c in self.cards.items()},
              'chains':[c.get_state() for c in self.chains],
              'morse_chains':[c.get_state() for c in self.morse_chains],
+             'saved_chains_lib': dict(self.saved_chains_lib),
+             'saved_morse_chains_lib': dict(self.saved_morse_chains_lib),
              'point_tracker': self.pt_panel.get_state(),
              'camera': self._get_cam_settings_state(),
+             'last_camera_index': self.cam_cb.currentIndex(),
+             'auto_start_camera': self.auto_start_cb.isChecked(),
              'global':{'smoothing':self.sms.value(),'cooldown':self.cds.value(),'holdTime':self.hds.value(),'tiltComp':self.pcs.value(),'zoom':self.zs.value(),'panX':self.pxs.value(),'panY':self.pys.value()}}
 
     def _apply_cfg(self, cfg):
@@ -3553,6 +3976,17 @@ class MainWindow(QMainWindow):
                 self.morse_chains[-1].set_state(cs)
         if 'camera' in cfg:
             self._set_cam_settings_state(cfg['camera'])
+        if 'saved_chains_lib' in cfg:
+            self.saved_chains_lib = dict(cfg['saved_chains_lib'])
+        if 'saved_morse_chains_lib' in cfg:
+            self.saved_morse_chains_lib = dict(cfg['saved_morse_chains_lib'])
+        self._refresh_load_dropdowns()
+        if 'last_camera_index' in cfg:
+            idx = cfg['last_camera_index']
+            if 0 <= idx < self.cam_cb.count():
+                self.cam_cb.setCurrentIndex(idx)
+        if 'auto_start_camera' in cfg:
+            self.auto_start_cb.setChecked(cfg['auto_start_camera'])
         if 'point_tracker' in cfg:
             self.pt_panel.set_state(cfg['point_tracker'])
         if 'global' in cfg:
