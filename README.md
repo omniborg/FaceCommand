@@ -76,6 +76,8 @@ Toggle Gestures button and trigger action
 
 Point Tracker allows accurate X and Y axis analog control, also compatible with other trigger actions and works concurrently with the other head gestures 
 
+  -Cursor control (in progress)
+
 Profile export/import
 
 While it's possible to use all of the gestures simultaneously, there is still some crosstalk between certain gestures that move similar parts of the face. This is especially true when moving your head around. This will be improved as I incorporate more head orientation compensation and better sensitivity control. I want to include as many gestures as possible because people have different abilities to control their face. Even with just a few gestures, many commands can be made with the Gesture Chains and Morse Chains tools.
@@ -84,7 +86,7 @@ The analog functionality works best by tuning sensitivity, deadzone, thresholds,
 Future features:
 
 -Each gesture having its own hold time and cooldown
--Cursor control
+
 
 
 -Cursor control with head movement 
